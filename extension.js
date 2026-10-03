@@ -27,8 +27,7 @@ import {
 
 import {WorkspaceIndicator} from './workspaceIndicator.js';
 
-const ICON_TEXTURE_SIZE = 24;
-let currentIconSize = ICON_TEXTURE_SIZE;
+let currentIconSize = 24;
 const DND_ACTIVATE_TIMEOUT = 500;
 
 const MIN_DRAG_UPDATE_INTERVAL = 500 * GLib.TIME_SPAN_MILLISECOND;
@@ -255,39 +254,22 @@ class WindowTitle extends TitleWidget {
             this._label.text = this._metaWindow.title;
     }
 
+    _updateIcon() {
+        this._icon.set_style(
+            `width: ${currentIconSize}px; height: ${currentIconSize}px;`);
 
-// ekleme başı
+        const app =
+            Shell.WindowTracker.get_default().get_window_app(this._metaWindow);
 
-_updateIcon() {
-    this._icon.set_style(
-        `width: ${currentIconSize}px; height: ${currentIconSize}px;`);
-
-    const app =
-        Shell.WindowTracker.get_default().get_window_app(this._metaWindow);
-
-    if (app) {
-        this._icon.child = app.create_icon_texture(currentIconSize);
-    } else {
-        this._icon.child = new St.Icon({
-            icon_name: 'application-x-executable',
-            icon_size: currentIconSize,
-        });
+        if (app) {
+            this._icon.child = app.create_icon_texture(currentIconSize);
+        } else {
+            this._icon.child = new St.Icon({
+                icon_name: 'application-x-executable',
+                icon_size: currentIconSize,
+            });
+        }
     }
-}
-// ekleme sonu, aşağıdaki comment yapıldı
-
-
-//    _updateIcon() {
-//        const app = Shell.WindowTracker.get_default().get_window_app(this._metaWindow);
-//        if (app) {
-//            this._icon.child = app.create_icon_texture(ICON_TEXTURE_SIZE);
-//        } else {
-//            this._icon.child = new St.Icon({
-//                icon_name: 'application-x-executable',
-//                icon_size: ICON_TEXTURE_SIZE,
-//            });
-//        }
-//    }
 }
 
 class AppTitle extends TitleWidget {
@@ -298,22 +280,14 @@ class AppTitle extends TitleWidget {
     constructor(app) {
         super();
 
-//        this._app = app;
-//        this._windows = new Set();
-//
-//        this._icon.child = app.create_icon_texture(ICON_TEXTURE_SIZE);
-//        this._label.text = app.get_name();
+        this._app = app;
+        this._windows = new Set();
 
-// yukarıdakileri comment yaptık ve aşağıyı ekliyoruz
-	this._app = app;
-	this._windows = new Set();
+        this._icon.set_style(
+            `width: ${currentIconSize}px; height: ${currentIconSize}px;`);
 
-	this._icon.set_style(
-    		`width: ${currentIconSize}px; height: ${currentIconSize}px;`);
-
-	this._icon.child = app.create_icon_texture(currentIconSize);
-	this._label.text = app.get_name();
-// ekleme sonu
+        this._icon.child = app.create_icon_texture(currentIconSize);
+        this._label.text = app.get_name();
 
         this._app.connectObject(
             'windows-changed', () => this._onWindowsChanged(),
@@ -395,7 +369,8 @@ class DragActor extends St.Bin {
     }
 }
 
-function getTitleTooltipText(titleActor, text = titleActor.text) {
+function getTitleTooltipText(titleActor) {
+    const text = titleActor.text;
     const [, , preferredTitleWidth] = titleActor.get_preferred_size();
     const maxTitleWidth = titleActor.allocation.get_width();
     return preferredTitleWidth <= maxTitleWidth ? '' : text;
@@ -661,6 +636,8 @@ class BaseButton extends DashItemContainer {
     }
 
     _onDestroy() {
+        this._removeLongPressTimeout();
+        this._contextMenu?.destroy();
     }
 }
 
@@ -682,9 +659,9 @@ class WindowButton extends BaseButton {
 
         this._updateVisibility();
 
-        this._windowTitle = this._createTitleActor();
-        this._button.set_child(this._windowTitle);
-        this.label_actor = this._windowTitle.label_actor;
+        const windowTitle = this._createTitleActor();
+        this._button.set_child(windowTitle);
+        this.label_actor = windowTitle.label_actor;
 
         this._contextMenu = new WindowContextMenu(this, this.metaWindow);
         this._contextMenu.connect('open-state-changed',
@@ -745,11 +722,6 @@ class WindowButton extends BaseButton {
 
     _updateIconGeometry() {
         this.metaWindow.set_icon_geometry(this._getIconGeometry());
-    }
-
-    _onDestroy() {
-        super._onDestroy();
-        this._contextMenu.destroy();
     }
 }
 
@@ -1120,6 +1092,7 @@ class WindowList extends St.Widget {
         this._dndWindow = null;
         this._destroyed = false;
         this._ctrlAltTabGroupAdded = false;
+        this._itemDragMonitorInstalled = false;
         this.connect('destroy', this._onDestroy.bind(this));
 
         this._perMonitor = perMonitor;
@@ -1280,75 +1253,63 @@ class WindowList extends St.Widget {
 
         this._delegate = this;
 
-//        this._settings = settings;
-//        this._settings.connectObject('changed::grouping-mode',
-//            () => this._groupingModeChanged(), this);
-//        this._grouped = undefined;
-//        this._groupingModeChanged();
-// ekleme başı
-this._settings = settings;
+        this._settings = settings;
 
-currentIconSize = this._settings.get_int('icon-size');
-
-this._settings.connectObject(
-    'changed::grouping-mode',
-    () => this._groupingModeChanged(),
-
-    'changed::font-size',
-    () => this._applyAppearance(),
-
-    'changed::panel-height',
-    () => this._applyAppearance(),
-
-    'changed::maximum-button-width',
-    () => this._maximumButtonWidthChanged(),
-
-    'changed::icon-size',
-    () => {
         currentIconSize = this._settings.get_int('icon-size');
-        this._populateWindowList();
-    },
 
-    this);
+        this._settings.connectObject(
+            'changed::grouping-mode',
+            () => this._groupingModeChanged(),
 
-this._applyAppearance();
+            'changed::font-size',
+            () => this._applyAppearance(),
 
-this._grouped = undefined;
-this._groupingModeChanged();
-// ekleme sonu
+            'changed::panel-height',
+            () => this._applyAppearance(),
 
+            'changed::maximum-button-width',
+            () => this._maximumButtonWidthChanged(),
+
+            'changed::icon-size',
+            () => {
+                currentIconSize = this._settings.get_int('icon-size');
+                this._populateWindowList();
+            },
+
+            this);
+
+        this._applyAppearance();
+
+        this._grouped = undefined;
+        this._groupingModeChanged();
     }
 
-// ekleme başı
+    _applyAppearance() {
+        const fontSize = this._settings.get_int('font-size');
+        const panelHeight = this._settings.get_int('panel-height');
 
-_applyAppearance() {
-    const fontSize = this._settings.get_int('font-size');
-    const panelHeight = this._settings.get_int('panel-height');
+        this.set_style(
+            `height: ${panelHeight}px;`);
 
-    this.set_style(
-        `height: ${panelHeight}px;`);
+        // The requested panel height is already known here. Position the panel
+        // directly instead of reacting synchronously to notify::height while
+        // Clutter is still resolving the new allocation.
+        this._updatePosition(panelHeight);
 
-    // The requested panel height is already known here. Position the panel
-    // directly instead of reacting synchronously to notify::height while
-    // Clutter is still resolving the new allocation.
-    this._updatePosition(panelHeight);
-
-    this._windowList.set_style(
-        `font-size: ${fontSize}pt;`);
-}
-
-_maximumButtonWidthChanged() {
-    const maximumWidth = this._settings.get_int('maximum-button-width');
-
-    for (const child of this._windowList.get_children()) {
-        if (child instanceof BaseButton)
-            child.setMaximumWidth(maximumWidth);
+        this._windowList.set_style(
+            `font-size: ${fontSize}pt;`);
     }
 
-    this._checkGrouping();
-}
+    _maximumButtonWidthChanged() {
+        const maximumWidth = this._settings.get_int('maximum-button-width');
 
-// ekleme sonu
+        for (const child of this._windowList.get_children()) {
+            if (child instanceof BaseButton)
+                child.setMaximumWidth(maximumWidth);
+        }
+
+        this._checkGrouping();
+    }
 
     get_transformed_position() {
         // HACK: Remove translation we use for animations
@@ -1578,6 +1539,10 @@ _maximumButtonWidthChanged() {
         if (children.find(c => c.metaWindow === win))
             return;
 
+        const id = this._windowSignals.get(win);
+        if (id)
+            win.disconnect(id);
+
         this._windowSignals.set(
             win, win.connect('unmanaged', () => this._removeWindow(win)));
 
@@ -1600,6 +1565,11 @@ _maximumButtonWidthChanged() {
         const children = this._windowList.get_children();
         const child = children.find(c => c.metaWindow === win);
         child?.animateOutAndDestroy();
+    }
+
+    _disconnectWindowSignals() {
+        this._windowSignals.forEach((id, win) => win.disconnect(id));
+        this._windowSignals.clear();
     }
 
     _clearDragPlaceholder() {
@@ -1689,11 +1659,19 @@ _maximumButtonWidthChanged() {
     }
 
     _monitorItemDrag() {
+        if (this._itemDragMonitorInstalled)
+            return;
+
         DND.addDragMonitor(this._itemDragMonitor);
+        this._itemDragMonitorInstalled = true;
     }
 
     _stopMonitoringItemDrag() {
+        if (!this._itemDragMonitorInstalled)
+            return;
+
         DND.removeDragMonitor(this._itemDragMonitor);
+        this._itemDragMonitorInstalled = false;
     }
 
     _onItemDragMotion(dragEvent) {
@@ -1716,7 +1694,7 @@ _maximumButtonWidthChanged() {
         const {source} = dropEvent.dropActor;
         this.acceptDrop(source);
         dropEvent.dropActor.destroy();
-        // HACK: SUCESS would make more sense, but results in gnome-shell
+        // HACK: SUCCESS would make more sense, but results in gnome-shell
         // skipping all drag-end code
         return DND.DragDropResult.CONTINUE;
     }
@@ -1779,12 +1757,12 @@ _maximumButtonWidthChanged() {
         this._clockTimeoutId = 0;
 
         // Stop callbacks before destroying objects they depend on.
-        this._windowSignals.forEach((id, win) => win.disconnect(id));
-        this._windowSignals.clear();
+        this._disconnectWindowSignals();
 
+        this._stopMonitoringItemDrag();
         this._stopMonitoringXdndDrag();
 
-        this._settings?.disconnectObject();
+        this._settings?.disconnectObject(this);
         this._settings = null;
 
         if (this._ctrlAltTabGroupAdded) {

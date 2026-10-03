@@ -40,7 +40,6 @@ SPDX-License-Identifier: GPL-2.0-or-later
       <default>true</default>
       <summary>Show workspace previews in window list</summary>
     </key>
-<!-- ekliyoruz -->
     <key name="icon-size" type="i">
       <default>24</default>
       <range min="8" max="48"/>
@@ -64,6 +63,5 @@ SPDX-License-Identifier: GPL-2.0-or-later
       <range min="80" max="500"/>
       <summary>Maximum window button width</summary>
     </key>
-<!-- ekleme sonu -->
   </schema>
 </schemalist>

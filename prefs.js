@@ -34,8 +34,6 @@ class WindowListPage extends Adw.PreferencesPage {
             this._settings.create_action('show-on-all-monitors'));
         this._actionGroup.add_action(
             this._settings.create_action('display-all-workspaces'));
-        this._actionGroup.add_action(
-            this._settings.create_action('embed-previews'));
 
         const groupingGroup = new Adw.PreferencesGroup({
             title: _('Window Grouping'),
@@ -60,7 +58,6 @@ class WindowListPage extends Adw.PreferencesPage {
             row.add_prefix(check);
             groupingGroup.add(row);
         }
-// ekleme başlangıcı
 
         const appearanceGroup = new Adw.PreferencesGroup({
             title: _('Appearance'),
@@ -131,8 +128,6 @@ class WindowListPage extends Adw.PreferencesPage {
             'value',
             Gio.SettingsBindFlags.DEFAULT);
         appearanceGroup.add(maximumButtonWidthRow);
-
-// ekleme sonu
 
         const miscGroup = new Adw.PreferencesGroup();
         this.add(miscGroup);
