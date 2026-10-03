@@ -1197,7 +1197,6 @@ class WindowList extends St.Widget {
 
         global.display.connectObject('workareas-changed',
             () => this._updatePosition(), this);
-        this.connect('notify::height', this._updatePosition.bind(this));
         this._updatePosition();
 
         this._appSystem = Shell.AppSystem.get_default();
@@ -1329,6 +1328,11 @@ _applyAppearance() {
     this.set_style(
         `height: ${panelHeight}px;`);
 
+    // The requested panel height is already known here. Position the panel
+    // directly instead of reacting synchronously to notify::height while
+    // Clutter is still resolving the new allocation.
+    this._updatePosition(panelHeight);
+
     this._windowList.set_style(
         `font-size: ${fontSize}pt;`);
 }
@@ -1391,11 +1395,11 @@ _maximumButtonWidthChanged() {
             });
     }
 
-    _updatePosition() {
+    _updatePosition(panelHeight = this.height) {
         this.width = this._monitor.width;
         this.set_position(
             this._monitor.x,
-            this._monitor.y + this._monitor.height - this.height);
+            this._monitor.y + this._monitor.height - panelHeight);
     }
 
     _retrackChrome(options) {
