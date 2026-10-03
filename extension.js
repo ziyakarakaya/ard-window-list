@@ -822,16 +822,102 @@ class GroupedWindowMenuItem extends PopupMenu.PopupBaseMenuItem {
 
         this._window = metaWindow;
 
-        const title = new WindowTitle(metaWindow);
-        title.set_style(`max-width: ${maxWidth}px;`);
-        this.add_child(title);
-        this.label_actor = title.label_actor;
+        this._title = new WindowTitle(metaWindow);
+        this._title.set_style(`max-width: ${maxWidth}px;`);
+        this.add_child(this._title);
+        this.label_actor = this._title.label_actor;
+
+        this._tooltipLabel = new St.Label({
+            style_class: 'dash-label',
+        });
+        this._tooltipLabel.hide();
+        Main.layoutManager.addChrome(this._tooltipLabel);
+        this._tooltipLabel.connect('destroy', () => {
+            this._tooltipLabel = null;
+        });
+
+        this.connect('notify::hover', () => this._syncTooltip(menu));
+        this.connect('notify::allocation', () => this._syncTooltip(menu));
+        this.connect('notify::mapped', () => this._syncTooltip(menu));
+        this._title.connectObject(
+            'notify::allocation', () => this._syncTooltip(menu),
+            'style-changed', () => this._syncTooltip(menu), this);
+        this.label_actor.connectObject(
+            'notify::allocation', () => this._syncTooltip(menu),
+            'style-changed', () => this._syncTooltip(menu), this);
+        this.label_actor.clutter_text.connectObject(
+            'notify::text', () => this._syncTooltip(menu), this);
+        metaWindow.connectObject(
+            'notify::title', () => this._syncTooltip(menu), this);
+        this.connect('destroy', () => {
+            const label = this._tooltipLabel;
+            this._tooltipLabel = null;
+            if (label) {
+                label.hide();
+                Main.layoutManager.removeChrome(label);
+                label.destroy();
+            }
+        });
 
         global.display.connectObject(
             'notify::focus-window', () => this._syncFocus(), this);
         menu.connectObject(
-            'open-state-changed', () => this._syncFocus(), this);
+            'open-state-changed', () => {
+                this._syncFocus();
+                this._syncTooltip(menu);
+            }, this);
         this._syncFocus();
+    }
+
+    _titleIsTruncated() {
+        const titleBox = this._title.get_allocation_box();
+        const titleContent = this._title.get_theme_node().get_content_box(titleBox);
+        const labelBox = this.label_actor.get_allocation_box();
+        const labelContent = this.label_actor.get_theme_node().get_content_box(labelBox);
+        const [labelStageX, labelStageY] = this.label_actor.get_transformed_position();
+        const [success, labelX] =
+            this._title.transform_stage_point(labelStageX, labelStageY);
+        if (!success)
+            return false;
+
+        // Intersect the label content with WindowTitle's constrained content box.
+        const left = Math.max(titleContent.x1 - titleBox.x1,
+            labelX + labelContent.x1 - labelBox.x1);
+        const right = Math.min(titleContent.x2 - titleBox.x1,
+            labelX + labelContent.x2 - labelBox.x1);
+        const visibleWidth = Math.max(0, right - left);
+        const layout = this.label_actor.clutter_text.get_layout().copy();
+        layout.set_width(-1);
+        layout.set_ellipsize(Pango.EllipsizeMode.NONE);
+        const [naturalWidth] = layout.get_pixel_size();
+        return naturalWidth > visibleWidth;
+    }
+
+    _syncTooltip(menu) {
+        const label = this._tooltipLabel;
+        if (!label)
+            return;
+
+        if (!menu.isOpen || !this.hover || !this.mapped || !this._titleIsTruncated()) {
+            label.hide();
+            return;
+        }
+
+        label.text = this._window.title ?? '';
+        label.show();
+
+        const parent = label.get_parent();
+        if (parent)
+            parent.set_child_above_sibling(label, null);
+
+        const [stageX, stageY] = this.get_transformed_position();
+        const [rowWidth] = this.get_transformed_size();
+        const [, labelWidth] = label.get_preferred_width(-1);
+        const [, labelHeight] = label.get_preferred_height(labelWidth);
+        const offset = label.get_theme_node().get_length('-y-offset');
+        const x = Math.max(0, Math.min(stageX + (rowWidth - labelWidth) / 2,
+            global.stage.width - labelWidth));
+        label.set_position(x, stageY - labelHeight - offset);
     }
 
     _syncFocus() {
