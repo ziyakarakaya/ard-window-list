@@ -614,9 +614,11 @@ export class WorkspaceIndicator extends PanelMenu.Button {
 
         const {
             baseStyleClass = 'workspace-indicator',
+            compact = false,
             settings,
         } = params;
 
+        this._compact = compact;
         this._settings = settings;
 
         baseStyleClassName = baseStyleClass;
@@ -672,8 +674,8 @@ export class WorkspaceIndicator extends PanelMenu.Button {
             this._updateTopBarRedirect();
         });
 
-        this._settings.connect('changed::embed-previews',
-            () => this._updateThumbnailVisibility());
+        this._settings.connectObject('changed::embed-previews',
+            () => this._updateThumbnailVisibility(), this);
         this._updateThumbnailVisibility();
     }
 
@@ -686,7 +688,8 @@ export class WorkspaceIndicator extends PanelMenu.Button {
     }
 
     _updateThumbnailVisibility() {
-        const usePreviews = this._settings.get_boolean('embed-previews');
+        const usePreviews = !this._compact &&
+            this._settings.get_boolean('embed-previews');
         this.reactive = !usePreviews;
 
         this._thumbnails.visible = usePreviews;

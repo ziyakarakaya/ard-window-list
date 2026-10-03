@@ -58,6 +58,12 @@ SPDX-License-Identifier: GPL-2.0-or-later
       <range min="20" max="80"/>
       <summary>Bottom panel height</summary>
     </key>
+
+    <key name="maximum-button-width" type="i">
+      <default>250</default>
+      <range min="80" max="500"/>
+      <summary>Maximum window button width</summary>
+    </key>
 <!-- ekleme sonu -->
   </schema>
 </schemalist>

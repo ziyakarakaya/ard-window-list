@@ -115,6 +115,23 @@ class WindowListPage extends Adw.PreferencesPage {
             Gio.SettingsBindFlags.DEFAULT);
         appearanceGroup.add(panelHeightRow);
 
+        const maximumButtonWidthRow = new Adw.SpinRow({
+            title: _('Maximum button width'),
+            subtitle: _('Pixels'),
+            adjustment: new Gtk.Adjustment({
+                lower: 80,
+                upper: 500,
+                step_increment: 10,
+                page_increment: 50,
+            }),
+        });
+        this._settings.bind(
+            'maximum-button-width',
+            maximumButtonWidthRow,
+            'value',
+            Gio.SettingsBindFlags.DEFAULT);
+        appearanceGroup.add(maximumButtonWidthRow);
+
 // ekleme sonu
 
         const miscGroup = new Adw.PreferencesGroup();

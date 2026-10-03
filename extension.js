@@ -11,6 +11,7 @@ import GObject from 'gi://GObject';
 import Gtk from 'gi://Gtk';
 import Meta from 'gi://Meta';
 import Mtk from 'gi://Mtk';
+import Pango from 'gi://Pango';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 
@@ -165,8 +166,11 @@ class TitleWidget extends St.Widget {
         hbox.add_child(this._icon);
 
         this._label = new St.Label({
+            x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
         });
+        this._label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        this._label.clutter_text.single_line_mode = true;
         hbox.add_child(this._label);
         this.label_actor = this._label;
 
@@ -465,6 +469,12 @@ class BaseButton extends DashItemContainer {
 
     get active() {
         return this._button.has_style_class_name('focused');
+    }
+
+    setMaximumWidth(maximumWidth) {
+        this._button.get_child().set_style(
+            `-st-natural-width: ${maximumWidth}px; ` +
+            `max-width: ${maximumWidth}px;`);
     }
 
     get ignore_workspace() {
@@ -929,9 +939,11 @@ class AppButton extends BaseButton {
                 this._minimizeOrActivateWindow(windows[0]);
             } else {
                 this._menu.removeAll();
+                const maxWidth = this._getMenuMaxWidth();
 
                 for (let i = 0; i < windows.length; i++) {
                     const windowTitle = new WindowTitle(windows[i]);
+                    windowTitle.set_style(`max-width: ${maxWidth}px;`);
                     const item = new PopupMenu.PopupBaseMenuItem();
                     item.add_child(windowTitle);
                     item._window = windows[i];
@@ -944,6 +956,15 @@ class AppButton extends BaseButton {
                 return;
             this._openMenu(this._contextMenu);
         }
+    }
+
+    _getMenuMaxWidth() {
+        const workArea =
+            Main.layoutManager.getWorkAreaForMonitor(this._monitorIndex);
+        const maxWidth = Math.floor(workArea.width / 2);
+
+        this._menu.actor.set_style(`max-width: ${maxWidth}px;`);
+        return maxWidth;
     }
 
     _canOpenPopupMenu() {
@@ -973,6 +994,12 @@ class WindowList extends St.Widget {
             track_hover: true,
             layout_manager: new Clutter.BinLayout(),
         });
+        this._windowSignals = new Map();
+        this._clockTimeoutId = 0;
+        this._dndTimeoutId = 0;
+        this._dndWindow = null;
+        this._destroyed = false;
+        this._ctrlAltTabGroupAdded = false;
         this.connect('destroy', this._onDestroy.bind(this));
 
         this._perMonitor = perMonitor;
@@ -992,14 +1019,27 @@ class WindowList extends St.Widget {
 
         this._windowList.connect('scroll-event', this._onScrollEvent.bind(this));
 
-        const indicatorsBox = new St.BoxLayout({x_align: Clutter.ActorAlign.END});
+        const indicatorsBox = new St.BoxLayout({
+            style_class: 'window-list-status-area',
+            x_align: Clutter.ActorAlign.END,
+            x_expand: false,
+            y_expand: true,
+        });
         box.add_child(indicatorsBox);
 
         this._workspaceIndicator = new BottomWorkspaceIndicator({
             baseStyleClass: 'window-list-workspace-indicator',
+            compact: true,
             settings,
         });
         indicatorsBox.add_child(this._workspaceIndicator.container);
+
+        this._clock = new St.Label({
+            style_class: 'window-list-clock',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        indicatorsBox.add_child(this._clock);
+        this._updateClock();
 
         this._mutterSettings = new Gio.Settings({schema_id: 'org.gnome.mutter'});
         this._mutterSettings.connectObject(
@@ -1031,10 +1071,12 @@ class WindowList extends St.Widget {
 
         Main.uiGroup.set_child_above_sibling(this, Main.layoutManager.panelBox);
         Main.ctrlAltTabManager.addGroup(this, _('Window List'), 'start-here-symbolic');
+        this._ctrlAltTabGroupAdded = true;
 
         this.visible = !inOverview;
 
-        this.width = this._monitor.width;
+        global.display.connectObject('workareas-changed',
+            () => this._updatePosition(), this);
         this.connect('notify::height', this._updatePosition.bind(this));
         this._updatePosition();
 
@@ -1080,11 +1122,22 @@ class WindowList extends St.Widget {
                 this._updateKeyboardAnchor();
             }, this);
 
+        if (Main.layoutManager._startingUp) {
+            Main.layoutManager.connectObject('startup-complete', () => {
+                if (Main.overview.visible)
+                    return;
+
+                this._retrackChrome(chromeOptions);
+                if (!this._monitor.inFullscreen)
+                    this._slideIn();
+                this._updateKeyboardAnchor();
+            }, this);
+        }
+
         global.display.connectObject('in-fullscreen-changed', () => {
             this._updateKeyboardAnchor();
         }, this);
 
-        this._windowSignals = new Map();
         global.display.connectObject(
             'window-created', (dsp, win) => this._addWindow(win, true), this);
 
@@ -1101,9 +1154,6 @@ class WindowList extends St.Widget {
             dragMotion: this._onItemDragMotion.bind(this),
             dragDrop: this._onItemDragDrop.bind(this),
         };
-
-        this._dndTimeoutId = 0;
-        this._dndWindow = null;
 
         this._dragPlaceholder = null;
         this._dragPlaceholderPos = -1;
@@ -1130,6 +1180,9 @@ this._settings.connectObject(
 
     'changed::panel-height',
     () => this._applyAppearance(),
+
+    'changed::maximum-button-width',
+    () => this._maximumButtonWidthChanged(),
 
     'changed::icon-size',
     () => {
@@ -1158,6 +1211,17 @@ _applyAppearance() {
 
     this._windowList.set_style(
         `font-size: ${fontSize}pt;`);
+}
+
+_maximumButtonWidthChanged() {
+    const maximumWidth = this._settings.get_int('maximum-button-width');
+
+    for (const child of this._windowList.get_children()) {
+        if (child instanceof BaseButton)
+            child.setMaximumWidth(maximumWidth);
+    }
+
+    this._checkGrouping();
 }
 
 // ekleme sonu
@@ -1191,7 +1255,24 @@ _applyAppearance() {
             this._menuManager.addMenu(this._workspaceIndicator.menu);
     }
 
+    _updateClock() {
+        const now = GLib.DateTime.new_now_local();
+        this._clock.text = now.format('%H:%M');
+
+        const millisecondsToNextMinute =
+            (60 - now.get_second()) * 1000 -
+            Math.floor(now.get_microsecond() / 1000);
+        this._clockTimeoutId = GLib.timeout_add_once(
+            GLib.PRIORITY_DEFAULT,
+            Math.max(millisecondsToNextMinute, 100),
+            () => {
+                this._clockTimeoutId = 0;
+                this._updateClock();
+            });
+    }
+
     _updatePosition() {
+        this.width = this._monitor.width;
         this.set_position(
             this._monitor.x,
             this._monitor.y + this._monitor.height - this.height);
@@ -1319,6 +1400,9 @@ _applyAppearance() {
     _addButton(button, animate) {
         this._settings.bind('display-all-workspaces',
             button, 'ignore-workspace', Gio.SettingsBindFlags.GET);
+
+        button.setMaximumWidth(
+            this._settings.get_int('maximum-button-width'));
 
         button.connect('drag-begin', () => {
             button.ease({
@@ -1512,7 +1596,8 @@ _applyAppearance() {
     }
 
     _stopMonitoringXdndDrag() {
-        DND.removeDragMonitor(this._xdndDragMonitor);
+        if (this._xdndDragMonitor)
+            DND.removeDragMonitor(this._xdndDragMonitor);
         this._removeActivateTimeout();
     }
 
@@ -1555,16 +1640,28 @@ _applyAppearance() {
     }
 
     _onDestroy() {
-        this._workspaceIndicator.destroy();
+        if (this._destroyed)
+            return;
+        this._destroyed = true;
 
-        Main.ctrlAltTabManager.removeGroup(this);
+        if (this._clockTimeoutId)
+            GLib.source_remove(this._clockTimeoutId);
+        this._clockTimeoutId = 0;
+
+        this._workspaceIndicator?.destroy();
+        this._workspaceIndicator = null;
+
+        if (this._ctrlAltTabGroupAdded) {
+            Main.ctrlAltTabManager.removeGroup(this);
+            this._ctrlAltTabGroupAdded = false;
+        }
 
         this._windowSignals.forEach((id, win) => win.disconnect(id));
         this._windowSignals.clear();
 
         this._stopMonitoringXdndDrag();
 
-        this._settings.disconnectObject();
+        this._settings?.disconnectObject();
         this._settings = null;
 
         const windows = global.get_window_actors();

@@ -22,38 +22,50 @@
   }
 
  .window-button > StWidget {
-  color: #000;
+  color: #d0d0d0;
+  background-color: rgba(32,32,32,0.94);
+  border: 1px solid rgba(255,255,255,0.20);
 }
 
 .window-button:hover > StWidget {
-  background-color: st-darken(#eee,5%);
+  color: #dedede;
+  background-color: rgba(48,48,48,0.96);
 }
 
 .window-button:active > StWidget,
 .window-button:focus > StWidget {
-  background-color: st-darken(#eee, 10%);
+  color: #e4e4e4;
+  background-color: rgba(56,56,56,0.96);
 }
 
 .window-button.focused > StWidget {
-  background-color: st-darken(#eee,15%);
+  color: #242424;
+  background-color: #d8d8d8;
 }
 
   .window-button.focused:hover > StWidget {
-    background-color: st-darken(#eee, 20%);
+    color: #242424;
+    background-color: #e0e0e0;
   }
 
   .window-button.focused:active > StWidget {
-    background-color: st-darken(#eee, 25%);
+    color: #242424;
+    background-color: #cccccc;
   }
 
 .window-button.minimized > StWidget {
-  color: #aaa;
-  background-color: #f9f9f9;
+  color: #ababab;
+  background-color: rgba(24,24,24,0.90);
+}
+
+.window-button.minimized:hover > StWidget {
+  color: #c2c2c2;
+  background-color: rgba(38,38,38,0.94);
 }
 
 .window-button.minimized:active > StWidget {
-  color: #aaa;
-  background-color: #f9f9f9;
+  color: #c2c2c2;
+  background-color: rgba(44,44,44,0.96);
 }
 
 .window-button-drag-actor {

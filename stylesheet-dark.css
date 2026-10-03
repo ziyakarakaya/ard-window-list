@@ -14,6 +14,19 @@
 .window-list {
   spacing: 2px;
   font-size: 10pt;
+  min-width: 0;
+}
+
+.window-list-status-area {
+  spacing: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background-color: rgba(255,255,255,0.1);
+}
+
+.window-list-clock {
+  color: #fff;
+  padding: 0 6px;
 }
 
 .bottom-panel {
@@ -25,6 +38,12 @@
 .window-button,
 .window-button-drag-actor {
   padding: 4px, 3px;
+}
+
+.window-button,
+.window-button-box,
+.window-button-box StLabel {
+  min-width: 0;
 }
 
 .window-button-drag-actor {
@@ -48,8 +67,9 @@
 }
 
 .window-button > StWidget {
-  color: #fff;
-  background-color: transparent;
+  color: #c8c8c8;
+  background-color: rgba(32,32,32,0.94);
+  border: 1px solid rgba(255,255,255,0.20);
   border-radius: 4px;
   padding: 3px 6px 1px;
   transition: 100ms ease;
@@ -68,34 +88,52 @@
 }
 
 .window-button:hover > StWidget {
-  background-color: #303030;
+  color: #dedede;
+  background-color: rgba(48,48,48,0.96);
+  border-color: rgba(255,255,255,0.30);
 }
 
 .window-button:active > StWidget,
 .window-button:focus > StWidget {
-  background-color: st-lighten(#303030, 5%);
+  color: #e4e4e4;
+  background-color: rgba(56,56,56,0.96);
+  border-color: rgba(255,255,255,0.34);
 }
 
 .window-button.focused > StWidget {
-  background-color: #5b5b5b;
+  color: #242424;
+  background-color: #cccccc;
+  border-color: rgba(255,255,255,0.48);
 }
 
   .window-button.focused:hover > StWidget {
-    background-color: st-lighten(#5b5b5b, 5%);
+    color: #242424;
+    background-color: #d8d8d8;
+    border-color: rgba(255,255,255,0.60);
   }
 
   .window-button.focused:active > StWidget {
-    background-color: st-lighten(#5b5b5b, 10%);
+    color: #242424;
+    background-color: #c2c2c2;
+    border-color: rgba(255,255,255,0.42);
   }
 
 .window-button.minimized > StWidget {
-  color: #666;
-  background-color: #161616;
+  color: #a3a3a3;
+  background-color: rgba(24,24,24,0.90);
+  border-color: rgba(255,255,255,0.14);
+}
+
+.window-button.minimized:hover > StWidget {
+  color: #bcbcbc;
+  background-color: rgba(38,38,38,0.94);
+  border-color: rgba(255,255,255,0.24);
 }
 
 .window-button.minimized:active > StWidget {
-  color: #666;
-  background-color: #161616;
+  color: #bcbcbc;
+  background-color: rgba(44,44,44,0.96);
+  border-color: rgba(255,255,255,0.28);
 }
 
 .window-button-icon {
