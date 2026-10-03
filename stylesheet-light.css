@@ -76,3 +76,13 @@
 .window-list .placeholder {
   border-color: rgba(0,0,0,0.5);
 }
+
+.window-list-grouped-item.active-window {
+  color: #242424;
+  background-color: #d8d8d8;
+}
+
+.window-list-grouped-item.active-window:active {
+  color: #242424;
+  background-color: #e0e0e0;
+}

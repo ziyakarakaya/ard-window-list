@@ -155,3 +155,13 @@
 .window-button.minimized .window-button-attention-indicator {
   background-color: st-transparentize(-st-accent-color, 0.4);
 }
+
+.window-list-grouped-item.active-window {
+  color: #242424;
+  background-color: #cccccc;
+}
+
+.window-list-grouped-item.active-window:active {
+  color: #242424;
+  background-color: #d8d8d8;
+}

@@ -395,6 +395,12 @@ class DragActor extends St.Bin {
     }
 }
 
+function getTitleTooltipText(titleActor, text = titleActor.text) {
+    const [, , preferredTitleWidth] = titleActor.get_preferred_size();
+    const maxTitleWidth = titleActor.allocation.get_width();
+    return preferredTitleWidth <= maxTitleWidth ? '' : text;
+}
+
 class BaseButton extends DashItemContainer {
     static {
         GObject.registerClass({
@@ -492,14 +498,7 @@ class BaseButton extends DashItemContainer {
     }
 
     showLabel() {
-        const [, , preferredTitleWidth] = this.label_actor.get_preferred_size();
-        const maxTitleWidth = this.label_actor.allocation.get_width();
-        const isTitleFullyShown = preferredTitleWidth <= maxTitleWidth;
-
-        const labelText = isTitleFullyShown
-            ? '' : this.label_actor.text;
-
-        this.setLabelText(labelText);
+        this.setLabelText(getTitleTooltipText(this.label_actor));
         super.showLabel();
     }
 
@@ -812,6 +811,37 @@ class AppContextMenu extends PopupMenu.PopupMenu {
     }
 }
 
+class GroupedWindowMenuItem extends PopupMenu.PopupBaseMenuItem {
+    static {
+        GObject.registerClass(this);
+    }
+
+    constructor(metaWindow, menu, maxWidth) {
+        super();
+        this.add_style_class_name('window-list-grouped-item');
+
+        this._window = metaWindow;
+
+        const title = new WindowTitle(metaWindow);
+        title.set_style(`max-width: ${maxWidth}px;`);
+        this.add_child(title);
+        this.label_actor = title.label_actor;
+
+        global.display.connectObject(
+            'notify::focus-window', () => this._syncFocus(), this);
+        menu.connectObject(
+            'open-state-changed', () => this._syncFocus(), this);
+        this._syncFocus();
+    }
+
+    _syncFocus() {
+        if (global.display.focus_window === this._window)
+            this.add_style_class_name('active-window');
+        else
+            this.remove_style_class_name('active-window');
+    }
+}
+
 class AppButton extends BaseButton {
     static {
         GObject.registerClass(this);
@@ -942,11 +972,8 @@ class AppButton extends BaseButton {
                 const maxWidth = this._getMenuMaxWidth();
 
                 for (let i = 0; i < windows.length; i++) {
-                    const windowTitle = new WindowTitle(windows[i]);
-                    windowTitle.set_style(`max-width: ${maxWidth}px;`);
-                    const item = new PopupMenu.PopupBaseMenuItem();
-                    item.add_child(windowTitle);
-                    item._window = windows[i];
+                    const item = new GroupedWindowMenuItem(
+                        windows[i], this._menu, maxWidth);
                     this._menu.addMenuItem(item);
                 }
                 this._openMenu(this._menu);
