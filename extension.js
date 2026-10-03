@@ -829,6 +829,13 @@ class GroupedWindowMenuItem extends PopupMenu.PopupBaseMenuItem {
 
         this._tooltipLabel = new St.Label({
             style_class: 'dash-label',
+            style: `max-width: ${maxWidth}px;`,
+        });
+        this._tooltipLabel.clutter_text.set({
+            ellipsize: Pango.EllipsizeMode.NONE,
+            single_line_mode: false,
+            line_wrap: true,
+            line_wrap_mode: Pango.WrapMode.WORD_CHAR,
         });
         this._tooltipLabel.hide();
         Main.layoutManager.addChrome(this._tooltipLabel);
@@ -1444,8 +1451,13 @@ _maximumButtonWidthChanged() {
     }
 
     _getMaxWindowListWidth() {
-        const indicatorsBox = this._workspaceIndicator.get_parent();
-        return this.width - indicatorsBox.get_preferred_width(-1)[1];
+        const indicatorsBox = this._workspaceIndicator?.get_parent();
+        if (!indicatorsBox)
+            return Math.max(0, this.width);
+
+        return Math.max(
+            0,
+            this.width - indicatorsBox.get_preferred_width(-1)[1]);
     }
 
     _groupingModeChanged() {
@@ -1460,7 +1472,8 @@ _maximumButtonWidthChanged() {
     }
 
     _checkGrouping() {
-        if (this._groupingMode !== GroupingMode.AUTO)
+        if (this._destroyed ||
+            this._groupingMode !== GroupingMode.AUTO)
             return;
 
         const maxWidth = this._getMaxWindowListWidth();
@@ -1761,14 +1774,7 @@ _maximumButtonWidthChanged() {
             GLib.source_remove(this._clockTimeoutId);
         this._clockTimeoutId = 0;
 
-        this._workspaceIndicator?.destroy();
-        this._workspaceIndicator = null;
-
-        if (this._ctrlAltTabGroupAdded) {
-            Main.ctrlAltTabManager.removeGroup(this);
-            this._ctrlAltTabGroupAdded = false;
-        }
-
+        // Stop callbacks before destroying objects they depend on.
         this._windowSignals.forEach((id, win) => win.disconnect(id));
         this._windowSignals.clear();
 
@@ -1776,6 +1782,14 @@ _maximumButtonWidthChanged() {
 
         this._settings?.disconnectObject();
         this._settings = null;
+
+        if (this._ctrlAltTabGroupAdded) {
+            Main.ctrlAltTabManager.removeGroup(this);
+            this._ctrlAltTabGroupAdded = false;
+        }
+
+        this._workspaceIndicator?.destroy();
+        this._workspaceIndicator = null;
 
         const windows = global.get_window_actors();
         for (let i = 0; i < windows.length; i++)
