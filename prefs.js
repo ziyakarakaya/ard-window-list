@@ -129,6 +129,23 @@ class WindowListPage extends Adw.PreferencesPage {
             Gio.SettingsBindFlags.DEFAULT);
         appearanceGroup.add(maximumButtonWidthRow);
 
+        const previewWidthRow = new Adw.SpinRow({
+            title: _('Preview width'),
+            subtitle: _('Pixels'),
+            adjustment: new Gtk.Adjustment({
+                lower: 160,
+                upper: 480,
+                step_increment: 10,
+                page_increment: 40,
+            }),
+        });
+        this._settings.bind(
+            'preview-width',
+            previewWidthRow,
+            'value',
+            Gio.SettingsBindFlags.DEFAULT);
+        appearanceGroup.add(previewWidthRow);
+
         const miscGroup = new Adw.PreferencesGroup();
         this.add(miscGroup);
 

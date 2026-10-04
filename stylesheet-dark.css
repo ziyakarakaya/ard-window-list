@@ -29,6 +29,24 @@
   padding: 0 6px;
 }
 
+.window-list-hover-card {
+  color: #dedede;
+  background-color: rgba(32,32,32,0.98);
+  border: 1px solid rgba(255,255,255,0.30);
+  border-radius: 6px;
+  padding: 10px;
+  spacing: 8px;
+}
+
+.window-list-hover-card StLabel {
+  min-width: 0;
+  padding: 0;
+}
+
+.window-list-hover-card-app {
+  font-weight: bold;
+}
+
 .bottom-panel {
   background-color: #000000;
   border-top-width: 0px;

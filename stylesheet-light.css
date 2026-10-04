@@ -8,6 +8,12 @@
 @import url("stylesheet-dark.css");
 @import url("stylesheet-workspace-switcher-light.css");
 
+.window-list-hover-card {
+  color: #242424;
+  background-color: rgba(248,248,248,0.98);
+  border-color: rgba(0,0,0,0.30);
+}
+
 #panel.bottom-panel {
     border-top-width: 1px;
     border-bottom-width: 0px;

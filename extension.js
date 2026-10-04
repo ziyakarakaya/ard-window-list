@@ -384,6 +384,212 @@ function getTitleTooltipText(titleActor) {
     return preferredTitleWidth <= maxTitleWidth ? '' : text;
 }
 
+class WindowHoverCard {
+    constructor(button, settings) {
+        this._button = button;
+        this._settings = settings;
+        this._laterId = 0;
+        this._window = null;
+        this._source = null;
+        this._clone = null;
+        this._actor = new St.BoxLayout({
+            style_class: 'window-list-hover-card',
+            orientation: Clutter.Orientation.VERTICAL,
+            reactive: false,
+            visible: false,
+        });
+        this._appName = new St.Label({
+            style_class: 'window-list-hover-card-app',
+        });
+        this._appName.clutter_text.set({
+            single_line_mode: true,
+            ellipsize: Pango.EllipsizeMode.END,
+        });
+        this._preview = new St.Bin({clip_to_allocation: true});
+        this._title = new St.Label();
+        this._title.clutter_text.set({
+            single_line_mode: false,
+            line_wrap: true,
+            line_wrap_mode: Pango.WrapMode.WORD_CHAR,
+            ellipsize: Pango.EllipsizeMode.END,
+        });
+        this._actor.add_child(this._appName);
+        this._actor.add_child(this._preview);
+        this._actor.add_child(this._title);
+        Main.layoutManager.addChrome(this._actor);
+
+        settings.connectObject('changed::preview-width',
+            () => this._queueUpdate(), this._actor);
+        button.connectObject(
+            'notify::allocation', () => this._queueUpdate(),
+            'notify::mapped', () => {
+                if (!button.mapped)
+                    this.hide();
+            }, this._actor);
+        this._actor.connect('style-changed', () => this._queueUpdate());
+    }
+
+    show(window) {
+        if (this._window !== window) {
+            this.hide();
+            this._window = window;
+            window.connectObject(
+                'notify::title', () => this._queueUpdate(),
+                'notify::wm-class', () => this._queueUpdate(),
+                'notify::gtk-application-id', () => this._queueUpdate(),
+                'size-changed', () => this._queueUpdate(),
+                'shown', () => this._queueUpdate(),
+                'unmanaging', () => this.hide(), this._actor);
+        }
+        // Each enter establishes and renders the request before any later runs.
+        this._actor.show();
+        this._update();
+        // Chrome may invalidate layout; coalesce one layout/source refresh.
+        this._queueUpdate();
+    }
+
+    _queueUpdate() {
+        if (!this._window || this._laterId)
+            return;
+
+        const window = this._window;
+        const laterId = global.compositor.get_laters().add(
+            Meta.LaterType.BEFORE_REDRAW, () => {
+                if (this._laterId !== laterId || this._window !== window)
+                    return GLib.SOURCE_REMOVE;
+                this._laterId = 0;
+                this._update();
+                return GLib.SOURCE_REMOVE;
+            });
+        this._laterId = laterId;
+    }
+
+    _clearSource() {
+        this._source?.disconnectObject(this._actor);
+        this._source = null;
+        this._clearClone();
+    }
+
+    _clearClone() {
+        this._clone?.destroy();
+        this._clone = null;
+        this._preview.hide();
+    }
+
+    _update() {
+        if (!this._window)
+            return;
+
+        if (!this._button.mapped) {
+            this.hide();
+            return;
+        }
+
+        const width = this._settings.get_int('preview-width');
+        const app = Shell.WindowTracker.get_default().get_window_app(this._window);
+        this._appName.text = app?.get_name() || this._window.get_wm_class() || _('Unknown application');
+        this._title.text = this._window.title ?? '';
+        this._appName.width = width;
+        this._title.width = width;
+        this._preview.width = width;
+
+        const layout = this._title.clutter_text.get_layout();
+        const context = layout.get_context();
+        const metrics = context.get_metrics(layout.get_font_description(), context.get_language());
+        const lineHeight = Math.ceil((metrics.get_ascent() + metrics.get_descent()) / Pango.SCALE);
+        // Clutter.Text ellipsizes the final line within this two-line allocation.
+        this._title.height = 2 * lineHeight;
+
+        const actorMonitor = Main.layoutManager.findIndexForActor(this._button);
+        const monitorIndex = actorMonitor >= 0 ? actorMonitor : this._button._monitorIndex;
+        if (!Number.isInteger(monitorIndex) || monitorIndex < 0)
+            return;
+        const workArea = Main.layoutManager.getWorkAreaForMonitor(monitorIndex);
+        this._updatePreview(width, workArea);
+
+        // Drop the previous explicit size so live width/geometry changes resize
+        // the card from its newly constrained contents.
+        this._actor.set_size(-1, -1);
+        const [, cardWidth] = this._actor.get_preferred_width(-1);
+        const [, cardHeight] = this._actor.get_preferred_height(cardWidth);
+        const [buttonX, buttonY] = this._button.get_transformed_position();
+        const [buttonWidth] = this._button.get_transformed_size();
+        const x = Math.max(workArea.x, Math.min(
+            buttonX + (buttonWidth - cardWidth) / 2,
+            workArea.x + workArea.width - cardWidth));
+        const y = Math.max(workArea.y, buttonY - cardHeight - 6);
+        this._actor.set_position(Math.round(x), Math.round(y));
+        this._actor.set_size(cardWidth, cardHeight);
+        // Allocate our own card, independently of the source/button allocation.
+        const box = new Clutter.ActorBox();
+        box.set_origin(Math.round(x), Math.round(y));
+        box.set_size(cardWidth, cardHeight);
+        this._actor.allocate(box);
+        this._actor.get_parent().set_child_above_sibling(this._actor, null);
+    }
+
+    _updatePreview(width, workArea) {
+        const source = this._window.get_compositor_private();
+        if (source !== this._source) {
+            this._clearSource();
+            this._source = source;
+            source?.connectObject(
+                'notify::allocation', () => this._queueUpdate(),
+                'notify::mapped', () => this._queueUpdate(),
+                'destroy', () => {
+                    this._clearSource();
+                    this._queueUpdate();
+                }, this._actor);
+        }
+
+        const frame = this._window.get_frame_rect();
+        if (!source || !Number.isFinite(frame.width) || !Number.isFinite(frame.height) ||
+            frame.width <= 0 || frame.height <= 0) {
+            this._clearClone();
+            return;
+        }
+
+        if (!this._clone) {
+            try {
+                // The compositor actor supplies pixels, never sizing/readiness.
+                this._clone = new Clutter.Clone({source});
+                this._preview.set_child(this._clone);
+            } catch {
+                // Keep text visible; source/window signals can recover a clone.
+                this._clearClone();
+                return;
+            }
+        }
+
+        const proportionalHeight = width * frame.height / frame.width;
+        const height = Math.max(1, Math.min(proportionalHeight, workArea.height / 2));
+        const scale = Math.min(width / frame.width, height / frame.height);
+        this._clone.set_size(frame.width * scale, frame.height * scale);
+        this._clone.set({
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._preview.height = height;
+        this._preview.show();
+    }
+
+    hide() {
+        if (this._laterId)
+            global.compositor.get_laters().remove(this._laterId);
+        this._laterId = 0;
+        this._actor.hide();
+        this._window?.disconnectObject(this._actor);
+        this._window = null;
+        this._clearSource();
+    }
+
+    destroy() {
+        this.hide();
+        Main.layoutManager.removeChrome(this._actor);
+        this._actor.destroy();
+    }
+}
+
 class BaseButton extends DashItemContainer {
     static {
         GObject.registerClass({
@@ -481,8 +687,26 @@ class BaseButton extends DashItemContainer {
     }
 
     showLabel() {
+        const window = this instanceof WindowButton
+            ? (this._unmanaging ? null : this.metaWindow)
+            : (this._singleWindowMode ? this.getWindowList()[0] : null);
+        if (window) {
+            super.hideLabel();
+            if (!this._hoverCard) {
+                const settings = Extension.lookupByURL(import.meta.url).getSettings();
+                this._hoverCard = new WindowHoverCard(this, settings);
+            }
+            this._hoverCard.show(window);
+            return;
+        }
+        this._hoverCard?.hide();
         this.setLabelText(getTitleTooltipText(this.label_actor));
         super.showLabel();
+    }
+
+    hideLabel() {
+        this._hoverCard?.hide();
+        super.hideLabel();
     }
 
     _setLongPressTimeout() {
@@ -644,6 +868,8 @@ class BaseButton extends DashItemContainer {
     }
 
     _onDestroy() {
+        this._hoverCard?.destroy();
+        this._hoverCard = null;
         this._removeLongPressTimeout();
         this._contextMenu?.destroy();
     }
@@ -992,6 +1218,8 @@ class AppButton extends BaseButton {
             return;
 
         this._singleWindowMode = singleWindowMode;
+
+        this._hoverCard?.hide();
 
         this._button.child?.destroy();
         this._contextMenu?.destroy();

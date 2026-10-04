@@ -63,5 +63,10 @@ SPDX-License-Identifier: GPL-2.0-or-later
       <range min="80" max="500"/>
       <summary>Maximum window button width</summary>
     </key>
+    <key name="preview-width" type="i">
+      <default>240</default>
+      <range min="160" max="480"/>
+      <summary>Individual window hover preview width</summary>
+    </key>
   </schema>
 </schemalist>
