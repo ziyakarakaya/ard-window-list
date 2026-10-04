@@ -64,6 +64,8 @@ class Actor extends Signals {
     }
 
     get_parent() { return this.parent; }
+    get_n_children() { return this.children.length; }
+    [Symbol.iterator]() { return this.children[Symbol.iterator](); }
     remove_child(child) {
         assert.equal(child.parent, this);
         this.children = this.children.filter(actor => actor !== child);
@@ -227,6 +229,16 @@ class Button extends Actor {
         // St.Button is interactive by default, unlike a plain St.Widget.
         super({reactive: true, track_hover: true, ...properties});
     }
+
+    destroy() {
+        // Unmapping a hovered St.Button can notify before native destruction
+        // has finished. Its preview must no longer receive this notification.
+        if (this.hover) {
+            this.hover = false;
+            this.emit('notify::hover');
+        }
+        super.destroy();
+    }
 }
 const context = vm.createContext({
     St: {BoxLayout: Actor, Label: Actor, Bin: Actor, Button, Widget: Actor,
@@ -289,7 +301,6 @@ const context = vm.createContext({
         ParamSpec: {boolean() {}}, ParamFlags: {READWRITE: 1},
     },
     DashItemContainer,
-    Extension: {lookupByURL: () => ({getSettings: () => settings, someWindowListContains: () => false})},
     _: text => text,
     global: {compositor: {get_laters: () => laters}},
 });
@@ -305,7 +316,7 @@ assert.equal(scrollApi.get_vadjustment(), scrollApi.vadjustment);
 const classes = source.slice(source.indexOf('class WindowHoverCard {'), source.indexOf('class AppContextMenu '));
 vm.runInContext(`${classes.replaceAll('import.meta.url', "'mock-extension'")}
     this.Button = WindowButton; this.Card = WindowHoverCard;`, context);
-const hoverConnection = source.match(/this\._button\.connect\('notify::hover', \(\) => \{[\s\S]*?\n        \}\);/)[0];
+const hoverConnection = source.match(/this\._button\.connectObject\('notify::hover', \(\) => \{[\s\S]*?\n        \}, this\);/)[0];
 const connectHover = vm.runInContext(`(function() { ${hoverConnection} })`, context);
 
 function makeButtons(count = 8) {
@@ -328,7 +339,8 @@ function makeButtons(count = 8) {
         // Use the real individual-button showLabel/hideLabel/destroy methods.
         Object.setPrototypeOf(button, context.Button.prototype);
         Object.assign(button, {metaWindow: window, _button: new Actor(),
-            _monitorIndex: 0, label: new Actor()});
+            _monitorIndex: 0, label: new Actor(), _settings: settings,
+            _someWindowListContains: () => false});
         connectHover.call(button);
         emitters.push(button, window, windowActor);
         return button;
@@ -613,7 +625,7 @@ console.log('PASS: two-line title updates, exactly three card children and windo
 // AUTO rebuilds and NEVER rebuilds both destroy/create individual button owners.
 for (const mode of ['AUTO rebuild', 'NEVER rebuild']) {
     for (const button of buttons) {
-        button._onDestroy();
+        button._destroy();
         button.destroy();
     }
     assert.equal(chrome.size, 0);
@@ -633,7 +645,7 @@ buttons[1].metaWindow.source = buttons[0].metaWindow.source;
 buttons[1].showLabel();
 redraw();
 const otherClone = buttons[1]._hoverCard._clone;
-buttons[0]._onDestroy();
+buttons[0]._destroy();
 assert.equal(otherClone.destroyed, false);
 visible(buttons[1]);
 assert.equal(buttons[1].metaWindow.source.destroyed, false);
@@ -642,10 +654,35 @@ buttons[1].emit('notify::mapped');
 assert.equal(buttons[1]._hoverCard._window, null);
 assert.equal(buttons[1]._hoverCard._actor.destroyed, false);
 for (const button of buttons)
-    button._onDestroy();
+    button._destroy();
 assert.equal(chrome.size, 0);
 assert.equal(pending.size, 0);
 console.log('PASS: source sharing does not share clones or cleanup; unmap and disable release owned resources');
+
+// Shell 50.1's DashItemContainer destroy handler runs before our own handler.
+// Its child can already be destroyed when the button cleanup releases fields.
+const inheritedOwner = makeButtons(1)[0];
+const inheritedChild = inheritedOwner._button;
+inheritedOwner.child = inheritedChild;
+inheritedOwner.add_child(inheritedChild);
+inheritedOwner.connect('destroy', () => {
+    inheritedOwner.child?.destroy();
+    inheritedOwner.label?.destroy();
+});
+inheritedOwner.connect('destroy', () => inheritedOwner._destroy());
+inheritedOwner.showLabel();
+redraw();
+const inheritedCard = inheritedOwner._hoverCard;
+const inheritedCardActor = inheritedCard._actor;
+inheritedOwner.destroy();
+assert.equal(inheritedChild.destroyed, true);
+assert.equal(inheritedCardActor.destroyed, true);
+assert.equal(inheritedOwner._button, null);
+assert.equal(inheritedOwner.metaWindow, null);
+assert.equal(inheritedCard._actor, null);
+assert.equal(chrome.size, 0);
+assert.equal(pending.size, 0);
+console.log('PASS: inherited actor destruction cleans previews and references without destroying the button twice');
 
 // Run the real grouped panel, item and AppButton methods in the same harness.
 class Menu extends Signals {
@@ -660,7 +697,41 @@ class Menu extends Signals {
     removeAll() { this.items.forEach(item => item.destroy()); this.items = []; }
     open() { this.isOpen = true; this.emit('open-state-changed', true); }
     close() { this.isOpen = false; this.emit('open-state-changed', false); }
-    destroy() { this.close(); this.removeAll(); this.actor.destroy(); }
+    destroy() {
+        this.close();
+        this.removeAll();
+        this.emit('destroy');
+        this.actor.destroy();
+        this.signals = [];
+    }
+}
+// Model the public registration API of Shell 50.1's PopupMenuManager.
+class ShellMenuManager {
+    constructor() { this.menus = []; }
+    addMenu(menu, position) {
+        if (this.menus.includes(menu))
+            return;
+        if (position === undefined)
+            this.menus.push(menu);
+        else
+            this.menus.splice(position, 0, menu);
+        menu.connectObject(
+            'open-state-changed', (_menu, open) => {
+                if (open)
+                    this.activeMenu = menu;
+                else if (this.activeMenu === menu)
+                    this.activeMenu = null;
+            },
+            'destroy', () => this.removeMenu(menu), this);
+        menu.actor.connectObject('captured-event', () => {}, this);
+    }
+    removeMenu(menu) {
+        if (!this.menus.includes(menu))
+            return;
+        menu.disconnectObject(this);
+        menu.actor.disconnectObject(this);
+        this.menus = this.menus.filter(item => item !== menu);
+    }
 }
 const display = new Signals();
 display.focus_window = null;
@@ -755,7 +826,37 @@ context.WindowTitle = class extends Actor {
 };
 context.WindowContextMenu = Menu;
 context.AppContextMenu = Menu;
-context.PopupMenu = {PopupBaseMenuItem: Actor};
+context.PopupMenu = {
+    PopupBaseMenuItem: Actor,
+    PopupMenuManager: ShellMenuManager,
+    PopupAnimation: {NONE: 0},
+};
+vm.runInContext(source.slice(source.indexOf('class WindowListMenuManager '),
+    source.indexOf('class TitleWidget ')) + '\nthis.MenuManager = WindowListMenuManager;', context);
+for (const open of [false, true]) {
+    const manager = new context.MenuManager(new Actor());
+    const first = new Menu();
+    const second = new Menu();
+    manager.addMenu(first);
+    manager.addMenu(first);
+    manager.addMenu(second, 0);
+    assert.deepEqual(manager.menus, [second, first], 'duplicate registration stays harmless');
+    first.destroy();
+    assert.equal(manager._ownedMenus.has(first), false, 'destroyed menus leave the registry');
+    if (open)
+        second.open();
+    manager.destroy();
+    manager.destroy();
+    assert.equal(second.isOpen, false, 'cleanup closes an active menu');
+    assert.equal(manager.menus.length, 0);
+    assert.equal(manager._ownedMenus, null);
+    assert.equal(manager.activeMenu, null);
+    assert.equal(second.signals.some(signal => signal.owner === manager), false);
+    assert.equal(second.actor.signals.some(signal => signal.owner === manager), false);
+    assert.equal(second.actor.destroyed, false, 'manager cleanup leaves menu destruction to its owner');
+    second.destroy();
+}
+console.log('PASS: menu managers release open/closed registrations and signals; repeated cleanup is harmless');
 const groupedSource = source.slice(source.indexOf('class GroupedWindowMenuItem '),
     source.indexOf('class WindowList '));
 vm.runInContext(`${groupedSource.replaceAll('import.meta.url', "'mock-extension'")}
@@ -774,13 +875,17 @@ function makeGroup(count) {
     const group = new Actor();
     Object.setPrototypeOf(group, context.App.prototype);
     Object.assign(group, {
-        app: {get_windows: () => windows, is_on_workspace: () => true},
+        app: Object.assign(new Signals(), {get_windows: () => windows, is_on_workspace: () => true}),
+        _settings: settings, _someWindowListContains: () => false,
         _button: new Actor({x: 400, y: 910, width: 100, height: 40, hover: true}),
         _monitorIndex: 0, _perMonitor: true, _ignoreWorkspace: false,
         _singleWindowMode: count === 1,
         _menu: new Menu(), _contextMenu: new Menu(), label: new Actor(),
-        _contextMenuManager: {addMenu() {}},
+        _contextMenuManager: new context.MenuManager(group),
+        _menuManager: new context.MenuManager(group),
     });
+    group._contextMenuManager.addMenu(group._contextMenu);
+    group._menuManager.addMenu(group._menu);
     group._button.child = new Actor();
     group._createTitleActor = () => new context.WindowTitle();
     group._menu.connect('open-state-changed', (_menu, open) => {
@@ -1054,7 +1159,7 @@ for (const count of [2, 3, 4, 5, 8, 9, 10, 17]) {
         assert.equal(panel._entries.size, 0);
     }
     const ownedActors = [panel._actor, panel._scroll, panel._content, panel._bridge];
-    group._onDestroy();
+    group._destroy();
     ownedActors.forEach(actor => assert.equal(actor.destroyed, true));
     assert.equal(chrome.size, 0);
 }
@@ -1115,7 +1220,7 @@ settle();
 transition.group._button.hover = false;
 transitionPanel.syncHover();
 assert.equal(timeouts.size, 1);
-transition.group._onDestroy();
+transition.group._destroy();
 assert.equal(timeouts.size, 0, 'disable must cancel pending hover-close timers');
 assert.equal(pending.size, 0);
 assert.equal(chrome.size, 0);
@@ -1137,7 +1242,7 @@ for (const result of [null, undefined, false]) {
     assert.equal(modalGrabs.length, 0);
     assert.equal(modalPopCount, popsBeforeFailure, 'failed acquisition must not pop a missing grab');
     assert.equal(keyFocus, restoredFocus);
-    failed.group._onDestroy();
+    failed.group._destroy();
 }
 restoredFocus.destroy();
 keyFocus = null;
@@ -1177,7 +1282,7 @@ for (const previousFocus of [new Actor(), null]) {
         hover(cycling.group, false);
     }
     assert.equal(modalPushCount, pushesBeforeCycles + 6);
-    cycling.group._onDestroy();
+    cycling.group._destroy();
     assert.equal(modalPopCount, popsBeforeCycles + 6, 'destroy after ESC cannot release twice');
     previousFocus?.destroy();
 }
@@ -1196,7 +1301,7 @@ newerGroup.group.showLabel();
 settle();
 assert.equal(modalGrabs.length, 2);
 assert.equal(keyFocus, newerGroup.group._groupHoverPanel._actor);
-olderGroup.group._onDestroy();
+olderGroup.group._destroy();
 assert.equal(modalPopCount, popsBeforeGroups + 1);
 assert.equal(modalGrabs.length, 1);
 assert.equal(keyFocus, newerGroup.group._groupHoverPanel._actor,
@@ -1205,7 +1310,7 @@ assert.equal(dispatchKey(context.Clutter.KEY_Escape), true);
 assert.equal(modalPopCount, popsBeforeGroups + 2);
 assert.equal(modalGrabs.length, 0);
 assert.equal(keyFocus, focusBeforeGroups, 'Shell repairs the saved focus chain on out-of-order close');
-newerGroup.group._onDestroy();
+newerGroup.group._destroy();
 assert.equal(modalPopCount, popsBeforeGroups + 2);
 focusBeforeGroups.destroy();
 keyFocus = null;
@@ -1224,7 +1329,7 @@ assertGroup(group, windows);
 assert.deepEqual([...panel._entries.values()].map(entry => entry.card), oldCards);
 const added = makeGroup(1);
 windows.push(added.windows[0]);
-added.group._onDestroy();
+added.group._destroy();
 group._windowsChanged();
 settle();
 assertGroup(group, windows);
@@ -1279,7 +1384,7 @@ assert.equal(panel._entries.size, 0);
 assert.equal(group._singleWindowMode, true);
 group.showLabel();
 visible(group, windows[0]);
-group._onDestroy();
+group._destroy();
 assert.equal(chrome.size, 0);
 assert.equal(pending.size, 0);
 console.log('PASS: live 480px width, edge clamps, narrow-monitor clipping without horizontal scrolling, workspace/monitor/skip filtering, window close and group-to-single cleanup');
@@ -1302,7 +1407,7 @@ advanceTime(500);
 visible(fastSingle);
 hover(fastSingle, false);
 hover(fastSingle, true);
-fastSingle._onDestroy();
+fastSingle._destroy();
 assert.equal(timeouts.size, 0, 'disable cancels an opening timer before a card exists');
 
 for (const state of ['unmapped', 'dragging', 'menu']) {
@@ -1313,10 +1418,10 @@ for (const state of ['unmapped', 'dragging', 'menu']) {
     else if (state === 'dragging')
         guarded._hoverDragging = true;
     else
-        guarded._contextMenu = {isOpen: true, destroy() {}};
+        guarded._contextMenu = Object.assign(new Signals(), {isOpen: true, destroy() {}});
     advanceTime(500);
     assert.equal(guarded._hoverCard, undefined, `${state} must suppress pending preview`);
-    guarded._onDestroy();
+    guarded._destroy();
 }
 
 const fastGroups = Array.from({length: 4}, () => makeGroup(10));
@@ -1327,7 +1432,7 @@ for (const {group: owner} of fastGroups) {
     hover(owner, false);
     assert.equal(owner._groupHoverPanel, undefined);
 }
-fastGroups.forEach(({group: owner}) => owner._onDestroy());
+fastGroups.forEach(({group: owner}) => owner._destroy());
 assert.equal(timeouts.size, 0);
 console.log('PASS: rapid single/group passes never open previews; stale open callback, unmap/drag/menu guards and pending-open disable cleanup');
 
@@ -1419,7 +1524,7 @@ assert.equal(remembered.group._groupHoverPanel._actor.visible, false);
 assert.equal(zoomPanel._actor.visible, true, 'ESC affects only the focused panel');
 assert.equal(zoomCase.group._hoverDismissed ?? false, false);
 assert.equal(modalGrabs.length, 1);
-remembered.group._onDestroy();
+remembered.group._destroy();
 pickedActor = zoomCase.group._button;
 
 const focusBeforeEscape = display.focus_window;
@@ -1453,7 +1558,7 @@ assert.equal(zoomPanel._actor.visible, false);
 advanceTime(1);
 settle();
 assertGroup(zoomCase.group, zoomCase.windows);
-zoomCase.group._onDestroy();
+zoomCase.group._destroy();
 assert.equal(modalGrabs.length, 0, 'disable with an open panel releases the keyboard grab');
 assert.equal(keyFocus, priorKeyFocus);
 priorKeyFocus.destroy();
@@ -1487,7 +1592,7 @@ assert.equal(pending.has(currentPanelId), true);
 previousGroup.mapped = false;
 previousGroup.emit('notify::mapped');
 assert.equal(previousGroup._groupHoverPanel._entries.size, 0);
-groups.forEach(({group: owner}) => owner._onDestroy());
+groups.forEach(({group: owner}) => owner._destroy());
 assert.equal(chrome.size, 0);
 assert.equal(pending.size, 0);
 console.log('PASS: rapid group changes, owner unmap and disable release all clones/chrome/later callbacks');
@@ -1553,7 +1658,7 @@ menu.open();
 menu.items[2].hover = true;
 menu.items[2].emit('notify::hover');
 const popupCloneOnDisable = menu.items[2]._hoverCard._clone;
-clickCase.group._onDestroy();
+clickCase.group._destroy();
 assert.equal(popupCloneOnDisable.destroyed, true);
 assert.equal(chrome.size, 0);
 assert.equal(pending.size, 0);
@@ -1566,7 +1671,7 @@ assert.equal(single.windows[0].minimized, true);
 display.focus_window = null;
 single.group._onClicked(null, 1);
 assert.equal(activations.at(-1), single.windows[0]);
-single.group._onDestroy();
+single.group._destroy();
 for (const emitter of emitters) {
     assert.equal(emitter.signals.some(signal => signal.owner?.destroyed), false,
         'destroyed owners leave no signal connections');
@@ -1575,3 +1680,70 @@ assert.equal(timeouts.size, 0, 'all grouped hover-close timers are released');
 assert.equal(modalGrabs.length, 0, 'all grouped modal grabs are released');
 assert.equal(modalPopCount, modalPushCount, 'every acquired opaque handle was released exactly once');
 console.log('PASS: unchanged single-window minimize/activate and no destroyed-owner signal leaks');
+
+// Exercise the real workspace-menu cleanup against the distinction in Shell's
+// signalTracker: Clutter actors auto-disconnect; plain JS menus do not.
+const workspaceSource = readFileSync(new URL('../workspaceIndicator.js', import.meta.url), 'utf8');
+const workspaceSignals = new Signals();
+Object.assign(workspaceSignals, {
+    nWorkspaces: 0,
+    get_active_workspace_index: () => 0,
+});
+context.global.workspace_manager = context.global.workspaceManager = workspaceSignals;
+emitters.push(workspaceSignals);
+const desktopSettings = [];
+context.Gio = {Settings: class extends Signals {
+    constructor() {
+        super();
+        desktopSettings.push(this);
+        emitters.push(this);
+    }
+}};
+context.PopupMenu.PopupMenu = class extends Menu {
+    addAction(_label, callback) {
+        this.preferencesAction = callback;
+        const item = new Actor();
+        this.addMenuItem(item);
+        return item;
+    }
+};
+context.PopupMenu.PopupMenuSection = class {
+    constructor() { this.box = this.actor = new Actor(); }
+    destroy() { this.actor.destroy(); }
+};
+context.PopupMenu.PopupSeparatorMenuItem = Actor;
+context.St.ScrollView = class extends ScrollView {
+    constructor(properties) {
+        super(properties);
+        if (properties.child)
+            this.set_child(properties.child);
+    }
+};
+context.St.Side = {TOP: 0};
+context.baseStyleClassName = 'window-list-workspace-indicator';
+context.Meta.prefs_get_workspace_name = () => 'Workspace';
+vm.runInContext(workspaceSource.slice(workspaceSource.indexOf('class WorkspacesMenu '),
+    workspaceSource.indexOf('export class WorkspaceIndicator ')) +
+    '\nthis.WorkspacesMenu = WorkspacesMenu;', context);
+let preferencesOpened = 0;
+for (let i = 0; i < 8; i++) {
+    const menu = new context.WorkspacesMenu(new Actor(), () => preferencesOpened++);
+    const settingsEmitter = desktopSettings.at(-1);
+    const menuActor = menu.actor;
+    menu.preferencesAction();
+    settingsEmitter.emit('changed::workspace-names');
+    assert.equal(settingsEmitter.signals.length, 1);
+    assert.equal(workspaceSignals.signals.length, 2);
+    menu.destroy();
+    assert.equal(menuActor.destroyed, true);
+    assert.equal(menu._desktopSettings, null);
+    assert.equal(menu._workspacesSection, null);
+    assert.equal(settingsEmitter.signals.length, 0);
+    assert.equal(workspaceSignals.signals.length, 0);
+    // These would call methods on destroyed section actors in the old code.
+    settingsEmitter.emit('changed::workspace-names');
+    workspaceSignals.emit('notify::n-workspaces');
+    workspaceSignals.emit('workspace-switched');
+}
+assert.equal(preferencesOpened, 8, 'Settings action uses the injected callback');
+console.log('PASS: eight workspace-menu lifetimes release settings/workspace signals and references; Settings action stays functional');

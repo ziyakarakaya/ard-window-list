@@ -11,7 +11,7 @@ import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 
-import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
+import {gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -284,6 +284,11 @@ class WorkspaceThumbnail extends St.Button {
 
     _onDestroy() {
         this._tooltip.destroy();
+        this._tooltip = null;
+        this._workspace.disconnectObject(this);
+        this._workspace = null;
+        // Preview actors are children of _preview and die with this thumbnail.
+        this._windowPreviews.clear();
     }
 }
 
@@ -426,8 +431,12 @@ class EditableMenuItem extends PopupMenu.PopupBaseMenuItem {
             this._entry, 'text',
             GObject.BindingFlags.DEFAULT);
 
-        this._entry.clutter_text.connect('activate',
-            () => this._stopEditing());
+        this._entry.clutter_text.connectObject('activate',
+            () => this._stopEditing(), this);
+        this.connect('destroy', () => {
+            this._entry.clutter_text.disconnectObject(this);
+            global.stage.disconnectObject(this);
+        });
 
         this._editButton = new St.Button({
             style_class: 'icon-button flat',
@@ -506,7 +515,7 @@ class EditableMenuItem extends PopupMenu.PopupBaseMenuItem {
 }
 
 class WorkspacesMenu extends PopupMenu.PopupMenu {
-    constructor(sourceActor) {
+    constructor(sourceActor, openPreferences) {
         super(sourceActor, 0.5, St.Side.TOP);
 
         this.actor.add_style_class_name(`${baseStyleClassName}-menu`);
@@ -525,17 +534,14 @@ class WorkspacesMenu extends PopupMenu.PopupMenu {
 
         this.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        this.addAction(_('Settings'), () => {
-            const extension = Extension.lookupByURL(import.meta.url);
-            extension.openPreferences();
-        });
+        this.addAction(_('Settings'), openPreferences);
 
         this._desktopSettings =
             new Gio.Settings({schema_id: 'org.gnome.desktop.wm.preferences'});
         this._desktopSettings.connectObject('changed::workspace-names', () => {
             this._updateWorkspaceLabels();
             this.emit('active-name-changed');
-        }, this);
+        }, this.actor);
 
         const {workspaceManager} = global;
         workspaceManager.connectObject(
@@ -543,6 +549,14 @@ class WorkspacesMenu extends PopupMenu.PopupMenu {
             'workspace-switched', () => this._updateActiveIndicator(),
             this.actor);
         this._updateWorkspaceItems();
+    }
+
+    destroy() {
+        this._desktopSettings.disconnectObject(this.actor);
+        global.workspace_manager.disconnectObject(this.actor);
+        super.destroy();
+        this._desktopSettings = null;
+        this._workspacesSection = null;
     }
 
     get activeName() {
@@ -616,6 +630,7 @@ export class WorkspaceIndicator extends PanelMenu.Button {
             baseStyleClass = 'workspace-indicator',
             compact = false,
             settings,
+            openPreferences,
         } = params;
 
         this._compact = compact;
@@ -624,7 +639,7 @@ export class WorkspaceIndicator extends PanelMenu.Button {
         baseStyleClassName = baseStyleClass;
         this.add_style_class_name(baseStyleClassName);
 
-        this.setMenu(new WorkspacesMenu(this));
+        this.setMenu(new WorkspacesMenu(this, openPreferences));
 
         const container = new St.Widget({
             layout_manager: new Clutter.BinLayout(),
@@ -648,8 +663,8 @@ export class WorkspaceIndicator extends PanelMenu.Button {
             style_class: 'system-status-icon',
         }));
 
-        this.menu.connect('active-name-changed',
-            () => this._statusLabel.set_text(this.menu.activeName));
+        this.menu.connectObject('active-name-changed',
+            () => this._statusLabel.set_text(this.menu.activeName), this);
 
         this._thumbnails = new WorkspacePreviews();
         container.add_child(this._thumbnails);
@@ -684,7 +699,11 @@ export class WorkspaceIndicator extends PanelMenu.Button {
             Main.panel.set_offscreen_redirect(Clutter.OffscreenRedirect.ALWAYS);
         this._inTopBar = false;
 
+        this._settings.disconnectObject(this);
+        this.menu.disconnectObject(this);
         super._onDestroy();
+        this.menu = null;
+        this._settings = null;
     }
 
     _updateThumbnailVisibility() {

@@ -4,8 +4,7 @@
 //
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// ARD Window List review changes, 2026-10-04: Shell-only focus navigation,
-// logging and lifecycle cleanup. See ATTRIBUTION.md.
+// ARD Window List/Taskbar customizations are documented in ATTRIBUTION.md.
 
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
@@ -113,14 +112,23 @@ class WindowContextMenu extends PopupMenu.PopupMenu {
         this._updateMinimizeItem();
         this._updateMaximizeItem();
 
-        this.connect('open-state-changed', () => {
+        this.connectObject('open-state-changed', () => {
             if (!this.isOpen)
                 return;
 
             this._minimizeItem.setSensitive(this._metaWindow.can_minimize());
             this._maximizeItem.setSensitive(this._metaWindow.can_maximize());
             this._closeItem.setSensitive(this._metaWindow.can_close());
-        });
+        }, this.actor);
+    }
+
+    destroy() {
+        this._metaWindow.disconnectObject(this.actor);
+        super.destroy();
+        this._metaWindow = null;
+        this._minimizeItem = null;
+        this._maximizeItem = null;
+        this._closeItem = null;
     }
 
     _updateMinimizeItem() {
@@ -131,6 +139,36 @@ class WindowContextMenu extends PopupMenu.PopupMenu {
     _updateMaximizeItem() {
         this._maximizeItem.label.text = this._metaWindow.is_maximized()
             ? _('Unmaximize') : _('Maximize');
+    }
+}
+
+// PopupMenuManager has no destroy() API. Track registrations so the owner can
+// explicitly release menu signals and modal state before dropping the manager.
+class WindowListMenuManager extends PopupMenu.PopupMenuManager {
+    constructor(owner) {
+        super(owner);
+        this._ownedMenus = new Set();
+    }
+
+    addMenu(menu, position) {
+        super.addMenu(menu, position);
+        this._ownedMenus.add(menu);
+    }
+
+    removeMenu(menu) {
+        super.removeMenu(menu);
+        this._ownedMenus?.delete(menu);
+    }
+
+    destroy() {
+        if (!this._ownedMenus)
+            return;
+        this.activeMenu?.close(PopupMenu.PopupAnimation.NONE);
+        for (const menu of this._ownedMenus)
+            this.removeMenu(menu);
+        this._ownedMenus.clear();
+        this._ownedMenus = null;
+        this.activeMenu = null;
     }
 }
 
@@ -263,6 +301,7 @@ class WindowTitle extends TitleWidget {
         const app =
             Shell.WindowTracker.get_default().get_window_app(this._metaWindow);
 
+        this._icon.child?.destroy();
         if (app) {
             this._icon.child = app.create_icon_texture(currentIconSize);
         } else {
@@ -432,7 +471,8 @@ class WindowHoverCard {
                 if (!button.mapped)
                     this.hide();
             }, this._actor);
-        this._actor.connect('style-changed', () => this._queueUpdate());
+        this._actor.connectObject('style-changed',
+            () => this._queueUpdate(), this._actor);
     }
 
     show(window) {
@@ -447,10 +487,10 @@ class WindowHoverCard {
                 'shown', () => this._queueUpdate(),
                 'unmanaging', () => this.hide(), this._actor);
         }
-        // Each enter establishes and renders the request before any later runs.
+        // Render immediately before scheduling a refresh for the next frame.
         this._actor.show();
         this._update();
-        // Chrome may invalidate layout; coalesce one layout/source refresh.
+        // Adding Shell chrome can change layout; refresh before redraw.
         this._queueUpdate();
     }
 
@@ -513,13 +553,12 @@ class WindowHoverCard {
         const workArea = Main.layoutManager.getWorkAreaForMonitor(monitorIndex);
         this._updatePreview(width, workArea);
 
-        // Drop the previous explicit size so live width/geometry changes resize
-        // the card from its newly constrained contents.
+        // Clear the previous size so the card follows its updated contents.
         this._actor.set_size(-1, -1);
         const [, cardWidth] = this._actor.get_preferred_width(-1);
         const [, cardHeight] = this._actor.get_preferred_height(cardWidth);
         if (this._embedded) {
-            // The panel allocates embedded cards; rendering/sizing stays shared.
+            // The group panel positions embedded cards after they are sized.
             this._actor.set_size(cardWidth, cardHeight);
             if (this._cardWidth !== cardWidth || this._cardHeight !== cardHeight) {
                 this._cardWidth = cardWidth;
@@ -576,11 +615,11 @@ class WindowHoverCard {
 
         if (!this._clone) {
             try {
-                // The compositor actor supplies pixels, never sizing/readiness.
+                // Use the compositor actor for content and the window frame for size.
                 this._clone = new Clutter.Clone({source});
                 this._preview.set_child(this._clone);
             } catch {
-                // Keep text visible; source/window signals can recover a clone.
+                // Keep the text visible and retry when the window or source changes.
                 this._clearClone();
                 return;
             }
@@ -611,10 +650,26 @@ class WindowHoverCard {
     }
 
     destroy() {
+        if (!this._actor)
+            return;
+        this._actor.disconnectObject(this._actor);
         this.hide();
+        this._settings.disconnectObject(this._actor);
+        this._button.disconnectObject(this._actor);
         if (!this._embedded)
             Main.layoutManager.removeChrome(this._actor);
+        this._appName.destroy();
+        this._preview.destroy();
+        this._title.destroy();
         this._actor.destroy();
+        this._actor = null;
+        this._appName = null;
+        this._preview = null;
+        this._title = null;
+        this._button = null;
+        this._settings = null;
+        this._onSizeChanged = null;
+        this._adjacentTo = null;
     }
 }
 
@@ -664,9 +719,9 @@ class GroupWindowHoverPanel {
         this._bridge = new St.Widget({reactive: true, clip_to_allocation: true});
         this._actor.add_child(this._bridge);
         Main.layoutManager.addChrome(this._actor);
-        this._actor.connect('notify::hover', () => this.syncHover());
+        this._actor.connectObject('notify::hover', () => this.syncHover(), this._actor);
         // Capture ESC and Ctrl+wheel before focused children consume them.
-        this._actor.connect('captured-event', (_actor, event) => {
+        this._actor.connectObject('captured-event', (_actor, event) => {
             if (this._modalGrab && event.type() === Clutter.EventType.KEY_PRESS &&
                 event.get_key_symbol() === Clutter.KEY_Escape) {
                 this._button._hoverDismissed = true;
@@ -677,9 +732,9 @@ class GroupWindowHoverPanel {
             if (event.type() === Clutter.EventType.SCROLL)
                 return this._onScrollEvent(event);
             return Clutter.EVENT_PROPAGATE;
-        });
-        this._panel.connect('style-changed', () => this._queueLayout());
-        this._scroll.connect('style-changed', () => this._queueLayout());
+        }, this._actor);
+        this._panel.connectObject('style-changed', () => this._queueLayout(), this._actor);
+        this._scroll.connectObject('style-changed', () => this._queueLayout(), this._actor);
         settings.connectObject('changed::preview-width',
             () => this._queueLayout(), this._actor);
         button.connectObject(
@@ -751,6 +806,7 @@ class GroupWindowHoverPanel {
         // hidden until layout, so hover/grabs on existing cards are preserved.
         for (const [window, entry] of this._entries) {
             if (!windows.includes(window)) {
+                entry.button.disconnectObject(entry.card._actor);
                 entry.card.destroy();
                 entry.button.destroy();
                 this._entries.delete(window);
@@ -780,16 +836,16 @@ class GroupWindowHoverPanel {
             });
             card._title.add_style_class_name('window-list-group-preview-title');
             this._entries.set(window, {button: cardButton, card});
-            cardButton.connect('notify::hover', () => {
+            cardButton.connectObject('notify::hover', () => {
                 if (cardButton.hover)
                     card._actor.add_style_pseudo_class('hover');
                 else
                     card._actor.remove_style_pseudo_class('hover');
-            });
-            cardButton.connect('clicked', () => {
+            }, card._actor);
+            cardButton.connectObject('clicked', () => {
                 this.hide();
                 Main.activateWindow(window);
-            });
+            }, card._actor);
             window.connectObject(
                 'workspace-changed', () => this.refresh(),
                 'notify::skip-taskbar', () => this.refresh(),
@@ -940,8 +996,7 @@ class GroupWindowHoverPanel {
         box.set_size(width, height);
         this._actor.allocate(box);
         this._actor.get_parent().set_child_above_sibling(this._actor, null);
-        // Keep a mapped panel mapped: hiding during layout invalidates hover
-        // and interrupts St.Button/ScrollBar pointer grabs mid-interaction.
+        // Keep the panel visible during layout to preserve hover and pointer grabs.
     }
 
     _addRow() {
@@ -999,6 +1054,7 @@ class GroupWindowHoverPanel {
         this._laterId = 0;
         this._actor.hide();
         for (const entry of this._entries.values()) {
+            entry.button.disconnectObject(entry.card._actor);
             entry.card.destroy();
             entry.button.destroy();
         }
@@ -1013,9 +1069,28 @@ class GroupWindowHoverPanel {
     }
 
     destroy() {
+        if (!this._actor)
+            return;
+        this._actor.disconnectObject(this._actor);
+        this._panel.disconnectObject(this._actor);
+        this._scroll.disconnectObject(this._actor);
         this.hide();
+        this._settings.disconnectObject(this._actor);
+        this._button.disconnectObject(this._actor);
+        global.display.disconnectObject(this._actor);
         Main.layoutManager.removeChrome(this._actor);
+        this._content.destroy();
+        this._scroll.destroy();
+        this._panel.destroy();
+        this._bridge.destroy();
         this._actor.destroy();
+        this._actor = null;
+        this._panel = null;
+        this._scroll = null;
+        this._content = null;
+        this._bridge = null;
+        this._button = null;
+        this._settings = null;
     }
 }
 
@@ -1036,25 +1111,31 @@ class BaseButton extends DashItemContainer {
         }, this);
     }
 
-    constructor(perMonitor, monitorIndex) {
+    constructor(perMonitor, monitorIndex, settings, someWindowListContains) {
         super();
+
+        this._settings = settings;
+        this._someWindowListContains = someWindowListContains;
 
         this._button = new St.Button({
             style_class: 'window-button',
             can_focus: true,
             x_expand: true,
+            y_expand: true,
             button_mask: St.ButtonMask.ONE | St.ButtonMask.THREE,
         });
-        this.setChild(this._button);
+        // DashItemContainer's destroy handler owns this direct child.
+        this.child = this._button;
+        this.add_child(this._button);
 
-        this._button.connect('notify::hover', () => {
+        this._button.connectObject('notify::hover', () => {
             if (this._button.hover) {
                 this._queueShowLabel();
             } else {
                 this._hoverDismissed = false;
                 this.hideLabel();
             }
-        });
+        }, this);
 
         this._perMonitor = perMonitor;
         this._monitorIndex = monitorIndex;
@@ -1062,11 +1143,11 @@ class BaseButton extends DashItemContainer {
 
         this.connect('notify::allocation',
             this._updateIconGeometry.bind(this));
-        this._button.connect('clicked', this._onClicked.bind(this));
-        this.connect('destroy', this._onDestroy.bind(this));
+        this._button.connectObject('clicked', this._onClicked.bind(this), this);
+        this.connect('destroy', this._destroy.bind(this));
         this.connect('popup-menu', this._onPopupMenu.bind(this));
 
-        this._contextMenuManager = new PopupMenu.PopupMenuManager(this);
+        this._contextMenuManager = new WindowListMenuManager(this);
 
         global.window_manager.connectObject('switch-workspace',
             () => this._updateVisibility(), this);
@@ -1082,21 +1163,21 @@ class BaseButton extends DashItemContainer {
 
         this._button._delegate = this;
         this._draggable = DND.makeDraggable(this._button);
-        this._draggable.connect('drag-begin', () => {
+        this._draggable.connectObject('drag-begin', () => {
             this._hoverDragging = true;
             this._removeLongPressTimeout();
             this.hideLabel();
             this.emit('drag-begin');
-        });
-        this._draggable.connect('drag-cancelled', () => {
+        }, this);
+        this._draggable.connectObject('drag-cancelled', () => {
             this._hoverDragging = false;
             this._draggable._dragActor?.setTargetWidth(this.width);
             this.emit('drag-end');
-        });
-        this._draggable.connect('drag-end', () => {
+        }, this);
+        this._draggable.connectObject('drag-end', () => {
             this._hoverDragging = false;
             this.emit('drag-end');
-        });
+        }, this);
     }
 
     get active() {
@@ -1156,10 +1237,8 @@ class BaseButton extends DashItemContainer {
             : (this._singleWindowMode ? this.getWindowList()[0] : null);
         if (window) {
             super.hideLabel();
-            if (!this._hoverCard) {
-                const settings = Extension.lookupByURL(import.meta.url).getSettings();
-                this._hoverCard = new WindowHoverCard(this, settings);
-            }
+            if (!this._hoverCard)
+                this._hoverCard = new WindowHoverCard(this, this._settings);
             this._hoverCard.show(window);
             return;
         }
@@ -1274,11 +1353,9 @@ class BaseButton extends DashItemContainer {
         if (isOpen)
             return;
 
-        const extension = Extension.lookupByURL(import.meta.url);
-
         const [x, y] = global.get_pointer();
         const actor = global.stage.get_actor_at_pos(Clutter.PickMode.REACTIVE, x, y);
-        if (extension.someWindowListContains(actor))
+        if (this._someWindowListContains(actor))
             actor.sync_hover();
     }
 
@@ -1332,12 +1409,19 @@ class BaseButton extends DashItemContainer {
             `_updateIconGeometry in ${this.constructor.name}`);
     }
 
-    _onDestroy() {
+    _destroy() {
         this._cancelShowLabel();
         this._hoverCard?.destroy();
         this._hoverCard = null;
         this._removeLongPressTimeout();
-        this._contextMenu?.destroy();
+        this._draggable?.disconnectObject(this);
+        this._draggable = null;
+        this._contextMenuManager?.destroy();
+        this._contextMenuManager = null;
+        this._button = null;
+        this._settings = null;
+        this._someWindowListContains = null;
+        this.child = null;
     }
 }
 
@@ -1346,8 +1430,8 @@ class WindowButton extends BaseButton {
         GObject.registerClass(this);
     }
 
-    constructor(metaWindow, perMonitor, monitorIndex) {
-        super(perMonitor, monitorIndex);
+    constructor(metaWindow, perMonitor, monitorIndex, settings, someWindowListContains) {
+        super(perMonitor, monitorIndex, settings, someWindowListContains);
 
         this.metaWindow = metaWindow;
         this._unmanaging = false;
@@ -1364,8 +1448,8 @@ class WindowButton extends BaseButton {
         this.label_actor = windowTitle.label_actor;
 
         this._contextMenu = new WindowContextMenu(this, this.metaWindow);
-        this._contextMenu.connect('open-state-changed',
-            this._onMenuStateChanged.bind(this));
+        this._contextMenu.connectObject('open-state-changed',
+            this._onMenuStateChanged.bind(this), this);
         this._contextMenu.actor.hide();
         this._contextMenuManager.addMenu(this._contextMenu);
         Main.uiGroup.add_child(this._contextMenu.actor);
@@ -1422,6 +1506,15 @@ class WindowButton extends BaseButton {
 
     _updateIconGeometry() {
         this.metaWindow.set_icon_geometry(this._getIconGeometry());
+    }
+
+    _destroy() {
+        this._contextMenu?.disconnectObject(this);
+        this._contextMenu?.destroy();
+        this._contextMenu = null;
+        super._destroy();
+        this.metaWindow?.disconnectObject(this);
+        this.metaWindow = null;
     }
 }
 
@@ -1481,6 +1574,15 @@ class AppContextMenu extends PopupMenu.PopupMenu {
 
         super.open(animate);
     }
+
+    destroy() {
+        super.destroy();
+        this._appButton = null;
+        this._minimizeItem = null;
+        this._unminimizeItem = null;
+        this._maximizeItem = null;
+        this._unmaximizeItem = null;
+    }
 }
 
 class GroupedWindowMenuItem extends PopupMenu.PopupBaseMenuItem {
@@ -1488,11 +1590,12 @@ class GroupedWindowMenuItem extends PopupMenu.PopupBaseMenuItem {
         GObject.registerClass(this);
     }
 
-    constructor(metaWindow, menu, maxWidth, monitorIndex) {
+    constructor(metaWindow, menu, maxWidth, monitorIndex, settings) {
         super();
         this.add_style_class_name('window-list-grouped-item');
 
         this._window = metaWindow;
+        this._settings = settings;
 
         this._title = new WindowTitle(metaWindow);
         this._title.set_style(`max-width: ${maxWidth}px;`);
@@ -1513,6 +1616,9 @@ class GroupedWindowMenuItem extends PopupMenu.PopupBaseMenuItem {
                 menu._windowPreviewItem = null;
             this._hoverCard?.destroy();
             this._hoverCard = null;
+            this._settings = null;
+            this._window = null;
+            this._title = null;
         });
 
         global.display.connectObject(
@@ -1538,8 +1644,7 @@ class GroupedWindowMenuItem extends PopupMenu.PopupBaseMenuItem {
             menu._windowPreviewItem = this;
         }
         if (!this._hoverCard) {
-            const settings = Extension.lookupByURL(import.meta.url).getSettings();
-            this._hoverCard = new WindowHoverCard(this, settings, {adjacentTo: menu.actor});
+            this._hoverCard = new WindowHoverCard(this, this._settings, {adjacentTo: menu.actor});
         }
         this._hoverCard.show(this._window);
     }
@@ -1557,22 +1662,22 @@ class AppButton extends BaseButton {
         GObject.registerClass(this);
     }
 
-    constructor(app, perMonitor, monitorIndex) {
-        super(perMonitor, monitorIndex);
+    constructor(app, perMonitor, monitorIndex, settings, someWindowListContains) {
+        super(perMonitor, monitorIndex, settings, someWindowListContains);
 
         this.app = app;
         this._updateVisibility();
 
-        this._menuManager = new PopupMenu.PopupMenuManager(this);
+        this._menuManager = new WindowListMenuManager(this);
         this._menu = new PopupMenu.PopupMenu(this, 0.5, St.Side.BOTTOM);
-        this._menu.connect('open-state-changed',
-            this._onMenuStateChanged.bind(this));
-        this._menu.connect('open-state-changed', (_menu, isOpen) => {
+        this._menu.connectObject('open-state-changed',
+            this._onMenuStateChanged.bind(this), this);
+        this._menu.connectObject('open-state-changed', (_menu, isOpen) => {
             if (isOpen)
                 this._groupHoverPanel?.hide();
-        });
+        }, this);
         this._menu.actor.hide();
-        this._menu.connect('activate', this._onMenuActivate.bind(this));
+        this._menu.connectObject('activate', this._onMenuActivate.bind(this), this);
         this._menuManager.addMenu(this._menu);
         Main.uiGroup.add_child(this._menu.actor);
 
@@ -1636,10 +1741,8 @@ class AppButton extends BaseButton {
             return;
         if (this.getWindowList().length > 1) {
             super.hideLabel();
-            if (!this._groupHoverPanel) {
-                const settings = Extension.lookupByURL(import.meta.url).getSettings();
-                this._groupHoverPanel = new GroupWindowHoverPanel(this, settings);
-            }
+            if (!this._groupHoverPanel)
+                this._groupHoverPanel = new GroupWindowHoverPanel(this, this._settings);
             this._groupHoverPanel.show();
             return;
         }
@@ -1664,7 +1767,9 @@ class AppButton extends BaseButton {
         this._hoverCard?.hide();
 
         this._button.child?.destroy();
+        this._contextMenu?.disconnectObject(this);
         this._contextMenu?.destroy();
+        this._contextMenu = null;
 
         if (this._singleWindowMode) {
             const [window] = windows;
@@ -1676,12 +1781,12 @@ class AppButton extends BaseButton {
         this._button.child = this._createTitleActor();
         this.label_actor = this._button.child.label_actor;
 
-        this._contextMenu.connect(
-            'open-state-changed', this._onMenuStateChanged.bind(this));
-        this._contextMenu.connect('open-state-changed', (_menu, isOpen) => {
+        this._contextMenu.connectObject(
+            'open-state-changed', this._onMenuStateChanged.bind(this), this);
+        this._contextMenu.connectObject('open-state-changed', (_menu, isOpen) => {
             if (isOpen)
                 this._groupHoverPanel?.hide();
-        });
+        }, this);
         Main.uiGroup.add_child(this._contextMenu.actor);
         this._contextMenu.actor.hide();
         this._contextMenuManager.addMenu(this._contextMenu);
@@ -1724,7 +1829,7 @@ class AppButton extends BaseButton {
 
                 for (let i = 0; i < windows.length; i++) {
                     const item = new GroupedWindowMenuItem(
-                        windows[i], this._menu, maxWidth, this._monitorIndex);
+                        windows[i], this._menu, maxWidth, this._monitorIndex, this._settings);
                     this._menu.addMenuItem(item);
                 }
                 this._openMenu(this._menu);
@@ -1753,11 +1858,22 @@ class AppButton extends BaseButton {
         child._window.activate(global.get_current_time());
     }
 
-    _onDestroy() {
+    _destroy() {
         this._groupHoverPanel?.destroy();
         this._groupHoverPanel = null;
-        super._onDestroy();
+        this._menu.disconnectObject(this);
         this._menu.destroy();
+        this._menu = null;
+        this._menuManager?.destroy();
+        this._menuManager = null;
+        this._windowTracker?.disconnectObject(this);
+        this._windowTracker = null;
+        this.app?.disconnectObject(this);
+        this.app = null;
+        this._contextMenu?.disconnectObject(this);
+        this._contextMenu?.destroy();
+        this._contextMenu = null;
+        super._destroy();
     }
 }
 
@@ -1766,7 +1882,7 @@ class WindowList extends St.Widget {
         GObject.registerClass(this);
     }
 
-    constructor(perMonitor, monitor, settings) {
+    constructor(perMonitor, monitor, settings, {someWindowListContains, openPreferences}) {
         super({
             name: 'panel',
             style_class: 'bottom-panel solid',
@@ -1785,6 +1901,7 @@ class WindowList extends St.Widget {
 
         this._perMonitor = perMonitor;
         this._monitor = monitor;
+        this._someWindowListContains = someWindowListContains;
 
         const box = new St.BoxLayout({x_expand: true, y_expand: true});
         this.add_child(box);
@@ -1812,6 +1929,7 @@ class WindowList extends St.Widget {
             baseStyleClass: 'window-list-workspace-indicator',
             compact: true,
             settings,
+            openPreferences,
         });
         indicatorsBox.add_child(this._workspaceIndicator.container);
 
@@ -2183,15 +2301,15 @@ class WindowList extends St.Widget {
         button.setMaximumWidth(
             this._settings.get_int('maximum-button-width'));
 
-        button.connect('drag-begin', () => {
+        button.connectObject('drag-begin', () => {
             button.ease({
                 opacity: 255 * DRAG_OPACITY,
                 duration: DRAG_FADE_DURATION,
             });
 
             this._monitorItemDrag();
-        });
-        button.connect('drag-end', () => {
+        }, this);
+        button.connectObject('drag-end', () => {
             button.ease({
                 opacity: 255,
                 duration: DRAG_FADE_DURATION,
@@ -2199,14 +2317,15 @@ class WindowList extends St.Widget {
 
             this._stopMonitoringItemDrag();
             this._clearDragPlaceholder();
-        });
+        }, this);
 
         this._windowList.add_child(button);
         button.show(animate);
     }
 
     _addApp(app, animate) {
-        const button = new AppButton(app, this._perMonitor, this._monitor.index);
+        const button = new AppButton(app, this._perMonitor, this._monitor.index,
+            this._settings, this._someWindowListContains);
         this._addButton(button, animate);
     }
 
@@ -2234,7 +2353,8 @@ class WindowList extends St.Widget {
         this._windowSignals.set(
             win, win.connect('unmanaged', () => this._removeWindow(win)));
 
-        const button = new WindowButton(win, this._perMonitor, this._monitor.index);
+        const button = new WindowButton(win, this._perMonitor, this._monitor.index,
+            this._settings, this._someWindowListContains);
         this._addButton(button, animate);
     }
 
@@ -2460,6 +2580,23 @@ class WindowList extends St.Widget {
 
         this._workspaceIndicator?.destroy();
         this._workspaceIndicator = null;
+        this._menuManager = null;
+        // Destroy the list before releasing its reference; its actor subtree
+        // owns all taskbar buttons, titles and any drag placeholder.
+        for (const button of this._windowList.get_children())
+            button.disconnectObject(this);
+        this._windowList.destroy();
+        this._windowList = null;
+        this._clock.destroy();
+        this._clock = null;
+        this._mutterSettings.disconnectObject(this);
+        this._mutterSettings = null;
+        this._appSystem.disconnectObject(this);
+        this._appSystem = null;
+        this._someWindowListContains = null;
+        this._itemDragMonitor = null;
+        this._xdndDragMonitor = null;
+        this._dragPlaceholder = null;
 
         const windows = global.get_window_actors();
         for (let i = 0; i < windows.length; i++)
@@ -2512,7 +2649,10 @@ export default class WindowListExtension extends Extension {
 
         Main.layoutManager.monitors.forEach(monitor => {
             if (showOnAllMonitors || monitor === Main.layoutManager.primaryMonitor)
-                this._windowLists.push(new WindowList(showOnAllMonitors, monitor, this.getSettings()));
+                this._windowLists.push(new WindowList(showOnAllMonitors, monitor, this._settings, {
+                    someWindowListContains: actor => this.someWindowListContains(actor),
+                    openPreferences: () => this.openPreferences(),
+                }));
         });
     }
 

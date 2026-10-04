@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [Desktop Entry]
 Type=Application
-Name=ARD Window List Preferences
-Comment=Configure Adaptive Responsive Desktop Window List
+Name=ARD Window List/Taskbar Preferences
+Comment=Configure Adaptive Responsive Desktop Window List/Taskbar
 Exec=gnome-extensions prefs ard-window-list@ziyakarakaya.github.io
 Icon=preferences-system
 Terminal=false

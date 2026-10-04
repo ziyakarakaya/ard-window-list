@@ -1,6 +1,6 @@
 # Attribution
 
-ARD Window List (Adaptive Responsive Desktop Window List) is an independent
+ARD Window List/Taskbar (Adaptive Responsive Desktop Window List/Taskbar) is an independent
 derivative of [GNOME Shell Extensions](https://gitlab.gnome.org/GNOME/gnome-shell-extensions),
 principally **Window List**, including components shared with **Workspace
 Indicator**. It is maintained in

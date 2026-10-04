@@ -52,7 +52,7 @@ def validate(sources):
     metadata = json.loads(sources["metadata.json"], object_pairs_hook=unique_object)
     expected = {
         "uuid": UUID,
-        "name": "ARD Window List",
+        "name": "ARD Window List/Taskbar",
         "settings-schema": SCHEMA_ID,
         "gettext-domain": "gnome-shell-extensions",
         "url": "https://github.com/ziyakarakaya/ard-window-list",
@@ -63,7 +63,7 @@ def validate(sources):
             raise ValueError(f"metadata.json: expected {key} = {value!r}")
     description = metadata.get("description")
     if not isinstance(description, str) or not description.startswith(
-        "Adaptive Responsive Desktop Window List:"
+        "Adaptive Responsive Desktop Window List/Taskbar:"
     ):
         raise ValueError("metadata.json: missing full project name in description")
 
