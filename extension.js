@@ -4,11 +4,13 @@
 //
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+// ARD Window List review changes, 2026-10-04: Shell-only focus navigation,
+// logging and lifecycle cleanup. See ATTRIBUTION.md.
+
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
-import Gtk from 'gi://Gtk';
 import Meta from 'gi://Meta';
 import Mtk from 'gi://Mtk';
 import Pango from 'gi://Pango';
@@ -295,7 +297,6 @@ class AppTitle extends TitleWidget {
         this._onWindowsChanged();
 
         this.connect('destroy', () => {
-            console.debug(`Clearing windows of app ${this._app.id}`);
             this._windows.clear();
         });
     }
@@ -312,7 +313,6 @@ class AppTitle extends TitleWidget {
         if (this._windows.has(window))
             return;
 
-        console.debug(`Tracking window ${window} for app ${this._app.id}`);
         window.connectObject(
             'notify::urgent', () => this._updateNeedsAttention(),
             'notify::demands-attention', () => this._updateNeedsAttention(),
@@ -324,7 +324,6 @@ class AppTitle extends TitleWidget {
         if (!this._windows.delete(window))
             return;
 
-        console.debug(`Untracking window ${window} for app ${this._app.id}`);
         window.disconnectObject(this);
     }
 
@@ -348,6 +347,13 @@ class DragActor extends St.Bin {
         });
 
         this.source = source;
+        this._resizeLaterIds = new Set();
+        this.connect('destroy', () => {
+            const laters = global.compositor.get_laters();
+            for (const id of this._resizeLaterIds)
+                laters.remove(id);
+            this._resizeLaterIds.clear();
+        });
     }
 
     setTargetWidth(width) {
@@ -358,7 +364,8 @@ class DragActor extends St.Bin {
 
         // then transition from the original to the new width
         const laters = global.compositor.get_laters();
-        laters.add(Meta.LaterType.BEFORE_REDRAW, () => {
+        const laterId = laters.add(Meta.LaterType.BEFORE_REDRAW, () => {
+            this._resizeLaterIds.delete(laterId);
             this.set({width: currentWidth});
             this.ease({
                 width,
@@ -366,6 +373,7 @@ class DragActor extends St.Bin {
             });
             return GLib.SOURCE_REMOVE;
         });
+        this._resizeLaterIds.add(laterId);
     }
 }
 
@@ -561,7 +569,7 @@ class BaseButton extends DashItemContainer {
 
         const event = Clutter.get_current_event();
         if (event && event.type() === Clutter.EventType.KEY_RELEASE)
-            menu.actor.navigate_focus(null, Gtk.DirectionType.TAB_FORWARD, false);
+            menu.actor.navigate_focus(null, St.DirectionType.TAB_FORWARD, false);
     }
 
     _minimizeOrActivateWindow(window) {
@@ -1804,6 +1812,7 @@ export default class WindowListExtension extends Extension {
 
     enable() {
         this._windowLists = [];
+        this._keyboardTranslationY = Main.layoutManager.keyboardBox.translation_y;
 
         this._settings = this.getSettings();
         this._settings.connectObject('changed::show-on-all-monitors',
@@ -1840,6 +1849,8 @@ export default class WindowListExtension extends Extension {
             windowList.destroy();
         });
         this._windowLists = null;
+        Main.layoutManager.keyboardBox.translation_y = this._keyboardTranslationY;
+        this._keyboardTranslationY = null;
     }
 
     someWindowListContains(actor) {

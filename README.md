@@ -157,11 +157,10 @@ never includes Git history.
 
 Metadata follows GNOME Shell 50's required `uuid`, `name`, `description`, and
 `shell-version` fields. `settings-schema` and `gettext-domain` are used by the
-extension API, and `url` points to this project's repository. The optional
-`extension-id` is inherited auxiliary metadata from GNOME Shell Extensions; it is
-not required by the Shell metadata loader and no ARD runtime code reads it. It is
-retained as `ard-window-list` rather than deleting an upstream field whose wider
-build-tool usage has not been established. Extension lookup uses the UUID.
+extension API, and `url` points to this project's repository. The inherited
+`extension-id` auxiliary field has been removed: neither the Shell metadata loader
+nor ARD code needs it, and this checkout has no upstream build system requiring
+it. Extension lookup uses the UUID.
 
 ## Release packaging
 
@@ -186,6 +185,23 @@ output filename within the repository:
 ```sh
 python3 scripts/package.py --output dist/ard-window-list-review-2.shell-extension.zip
 ```
+
+For an **extensions.gnome.org (EGO) submission**, use the separate minimal mode:
+
+```sh
+python3 scripts/package.py --ego
+unzip -l dist/ard-window-list@ziyakarakaya.github.io.ego.shell-extension.zip
+unzip -t dist/ard-window-list@ziyakarakaya.github.io.ego.shell-extension.zip
+```
+
+The EGO ZIP contains only metadata, the four JavaScript modules, four stylesheets,
+schema XML, `LICENSE`, and `ATTRIBUTION.md` (12 files). It excludes README and the
+entire `data/` directory, including the optional desktop launcher, as well as all
+development and generated artifacts excluded from the GitHub release ZIP.
+Both modes run the same metadata, schema, and JavaScript validation. `--output`
+also works with `--ego` to preserve an earlier submission candidate. Review against
+[GNOME's review guidelines](https://gjs.guide/extensions/review-guidelines/review-guidelines.html)
+before any eventual submission; building either ZIP does not submit it.
 
 Identical source files produce identical archive bytes using fixed ZIP timestamps
 and permissions with the same Python/zlib toolchain. No version number is invented

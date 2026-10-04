@@ -57,6 +57,14 @@ has no unique ARD functionality. It, the generated compiled schema, and local
 `AGENTS.md` are ignored and excluded from release ZIPs and should not be tracked
 in the public source tree. Existing local files are preserved.
 
+The EGO preparation in October 2026 removes the unused `extension-id` metadata
+field and adds a separate submission allowlist. In `extension.js`, it replaces
+the GTK import used for focus direction with the equivalent St enum, removes
+routine window-tracking debug logs, and cancels pending drag-resize compositor
+callbacks when the drag actor is destroyed. It also restores the on-screen
+keyboard's original vertical offset on disable. These review fixes retain the
+active window-list behavior and all original source notices.
+
 ## Copyright and licensing
 
 All original per-file copyright notices and

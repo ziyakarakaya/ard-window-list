@@ -1,5 +1,4 @@
 {
-"extension-id": "ard-window-list",
 "uuid": "ard-window-list@ziyakarakaya.github.io",
 "settings-schema": "org.gnome.shell.extensions.window-list-custom",
 "gettext-domain": "gnome-shell-extensions",

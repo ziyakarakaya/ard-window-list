@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Ziya Karakaya
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Validate and package the explicitly listed public extension files."""
+"""Validate and package GitHub release or GNOME Extensions submission files."""
 
 import argparse
 import io
@@ -21,7 +21,7 @@ JAVASCRIPT = (
     "extension.js", "prefs.js", "workspacePrefs.js", "workspaceIndicator.js",
 )
 # An allowlist prevents local files and new development artifacts leaking into ZIPs.
-RELEASE_FILES = (
+EGO_FILES = (
     "metadata.json",
     *JAVASCRIPT,
     "stylesheet-dark.css",
@@ -30,8 +30,11 @@ RELEASE_FILES = (
     "stylesheet-workspace-switcher-light.css",
     SCHEMA_FILE,
     "LICENSE",
-    "README.md",
     "ATTRIBUTION.md",
+)
+RELEASE_FILES = (
+    *EGO_FILES,
+    "README.md",
     "data/ard-window-list-preferences.desktop",
 )
 
@@ -50,8 +53,8 @@ def validate(sources):
     expected = {
         "uuid": UUID,
         "name": "ARD Window List",
-        "extension-id": "ard-window-list",
         "settings-schema": SCHEMA_ID,
+        "gettext-domain": "gnome-shell-extensions",
         "url": "https://github.com/ziyakarakaya/ard-window-list",
         "shell-version": ["50"],
     }
@@ -84,19 +87,23 @@ def validate(sources):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--ego", action="store_true",
+        help="build the minimal extensions.gnome.org submission ZIP",
+    )
+    parser.add_argument(
         "--output", type=Path,
-        default=Path("dist") / f"{UUID}.shell-extension.zip",
         help="new ZIP path inside this repository (existing files are never overwritten)",
     )
     args = parser.parse_args()
-    output = (ROOT / args.output).resolve()
+    suffix = ".ego.shell-extension.zip" if args.ego else ".shell-extension.zip"
+    output = (ROOT / (args.output or Path("dist") / f"{UUID}{suffix}")).resolve()
     if not output.is_relative_to(ROOT) or output.suffix != ".zip":
         raise ValueError("Output must be a .zip file inside this repository")
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite {output}; choose another --output")
 
     sources = {}
-    for filename in RELEASE_FILES:
+    for filename in EGO_FILES if args.ego else RELEASE_FILES:
         path = ROOT / filename
         if path.is_symlink() or not path.resolve().is_relative_to(ROOT):
             raise ValueError(f"Release input must be a regular repository file: {filename}")
