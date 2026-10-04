@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Ziya Karakaya
+# SPDX-License-Identifier: GPL-2.0-or-later
+[Desktop Entry]
+Type=Application
+Name=ARD Window List Preferences
+Comment=Configure Adaptive Responsive Desktop Window List
+Exec=gnome-extensions prefs ard-window-list@ziyakarakaya.github.io
+Icon=preferences-system
+Terminal=false
+Categories=Settings;DesktopSettings;
+OnlyShowIn=GNOME;

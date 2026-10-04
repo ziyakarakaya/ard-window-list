@@ -1,0 +1,13 @@
+# Release output and local validation artifacts
+/dist/
+/schemas/gschemas.compiled
+/AGENTS.md
+__pycache__/
+*.py[cod]
+
+# Editor and experimental backups (already tracked files remain tracked)
+*~
+*.bak
+*.orig
+*.rej
+*.before-*

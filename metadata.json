@@ -1,10 +1,10 @@
 {
-"extension-id": "window-list",
-"uuid": "window-list-custom@ziya.local",
+"extension-id": "ard-window-list",
+"uuid": "ard-window-list@ziyakarakaya.github.io",
 "settings-schema": "org.gnome.shell.extensions.window-list-custom",
 "gettext-domain": "gnome-shell-extensions",
 "name": "ARD Window List",
-"description": "Display a window list at the bottom of the screen.\nThis extension is part of Classic Mode and is officially supported by GNOME. Please do not report bugs using the form below, use GNOME's GitLab instance instead.",
+"description": "Adaptive Responsive Desktop Window List: a customizable bottom window list with adaptive grouping, workspace controls, and live appearance settings. Based on GNOME Shell Extensions Window List.",
 "shell-version": [ "50" ],
-"url": "https://gitlab.gnome.org/GNOME/gnome-shell-extensions"
+"url": "https://github.com/ziyakarakaya/ard-window-list"
 }
