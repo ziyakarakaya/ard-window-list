@@ -28,10 +28,13 @@ testing in a running GNOME session.
 
 ## Screenshots
 
-<!-- Add screenshots of the bottom panel, grouped windows, and preferences here.
-     Remove private window titles and other personal information before adding them. -->
-Screenshots will be added before the public release.
+### Window list
 
+![ARD Window List](screenshots/ard-window-list-main.png)
+
+### Preferences
+
+![ARD Window List Preferences](screenshots/ard-window-list-preferences.png)
 ## Install from source
 
 Requirements: GNOME Shell 50, `gnome-extensions`, Python 3.9 or newer, Node.js with
