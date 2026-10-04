@@ -1,8 +1,8 @@
-# ARD Window List
+# ARD Window List/Taskbar
 
 **Adaptive Responsive Desktop Window List/Taskbar**
 
-ARD Window List is a GNOME Shell Extension for a customizable taskbar, window list, and bottom panel. It adapts window grouping to available space and provides workspace controls and live appearance settings.
+ARD Window List/Taskbar is a GNOME Shell Extension for a customizable taskbar, window list, and bottom panel. It adapts window grouping to available space and provides workspace controls and live appearance settings.
 
 Repository: [ziyakarakaya/ard-window-list](https://github.com/ziyakarakaya/ard-window-list)
 
