@@ -131,7 +131,7 @@ class WindowListPage extends Adw.PreferencesPage {
 
         const previewWidthRow = new Adw.SpinRow({
             title: _('Preview width'),
-            subtitle: _('Pixels'),
+            subtitle: _('Pixels; Ctrl+scroll in the grouped preview also changes this'),
             adjustment: new Gtk.Adjustment({
                 lower: 160,
                 upper: 480,

@@ -385,9 +385,12 @@ function getTitleTooltipText(titleActor) {
 }
 
 class WindowHoverCard {
-    constructor(button, settings) {
+    constructor(button, settings, {parent = null, onSizeChanged = null, adjacentTo = null} = {}) {
         this._button = button;
         this._settings = settings;
+        this._embedded = parent !== null;
+        this._onSizeChanged = onSizeChanged;
+        this._adjacentTo = adjacentTo;
         this._laterId = 0;
         this._window = null;
         this._source = null;
@@ -416,7 +419,10 @@ class WindowHoverCard {
         this._actor.add_child(this._appName);
         this._actor.add_child(this._preview);
         this._actor.add_child(this._title);
-        Main.layoutManager.addChrome(this._actor);
+        if (parent)
+            parent.set_child(this._actor);
+        else
+            Main.layoutManager.addChrome(this._actor);
 
         settings.connectObject('changed::preview-width',
             () => this._queueUpdate(), this._actor);
@@ -512,12 +518,31 @@ class WindowHoverCard {
         this._actor.set_size(-1, -1);
         const [, cardWidth] = this._actor.get_preferred_width(-1);
         const [, cardHeight] = this._actor.get_preferred_height(cardWidth);
+        if (this._embedded) {
+            // The panel allocates embedded cards; rendering/sizing stays shared.
+            this._actor.set_size(cardWidth, cardHeight);
+            if (this._cardWidth !== cardWidth || this._cardHeight !== cardHeight) {
+                this._cardWidth = cardWidth;
+                this._cardHeight = cardHeight;
+                this._onSizeChanged?.();
+            }
+            return;
+        }
         const [buttonX, buttonY] = this._button.get_transformed_position();
         const [buttonWidth] = this._button.get_transformed_size();
-        const x = Math.max(workArea.x, Math.min(
-            buttonX + (buttonWidth - cardWidth) / 2,
+        let anchorX = buttonX + (buttonWidth - cardWidth) / 2;
+        let anchorY = buttonY - cardHeight - 6;
+        if (this._adjacentTo) {
+            const [menuX] = this._adjacentTo.get_transformed_position();
+            const [menuWidth] = this._adjacentTo.get_transformed_size();
+            anchorX = menuX + menuWidth + 6;
+            if (anchorX + cardWidth > workArea.x + workArea.width)
+                anchorX = menuX - cardWidth - 6;
+            anchorY = Math.min(buttonY, workArea.y + workArea.height - cardHeight);
+        }
+        const x = Math.max(workArea.x, Math.min(anchorX,
             workArea.x + workArea.width - cardWidth));
-        const y = Math.max(workArea.y, buttonY - cardHeight - 6);
+        const y = Math.max(workArea.y, anchorY);
         this._actor.set_position(Math.round(x), Math.round(y));
         this._actor.set_size(cardWidth, cardHeight);
         // Allocate our own card, independently of the source/button allocation.
@@ -561,7 +586,9 @@ class WindowHoverCard {
             }
         }
 
-        const proportionalHeight = width * frame.height / frame.width;
+        // Group cards share a compact slot; fit each window inside it without
+        // changing its aspect ratio. Individual previews retain their geometry.
+        const proportionalHeight = this._embedded ? width * 9 / 16 : width * frame.height / frame.width;
         const height = Math.max(1, Math.min(proportionalHeight, workArea.height / 2));
         const scale = Math.min(width / frame.width, height / frame.height);
         this._clone.set_size(frame.width * scale, frame.height * scale);
@@ -581,6 +608,408 @@ class WindowHoverCard {
         this._window?.disconnectObject(this._actor);
         this._window = null;
         this._clearSource();
+    }
+
+    destroy() {
+        this.hide();
+        if (!this._embedded)
+            Main.layoutManager.removeChrome(this._actor);
+        this._actor.destroy();
+    }
+}
+
+class GroupWindowHoverPanel {
+    constructor(button, settings) {
+        this._button = button;
+        this._settings = settings;
+        this._entries = new Map();
+        this._closingWindows = new Set();
+        this._rows = [];
+        this._laterId = 0;
+        this._hideId = 0;
+        this._modalGrab = null;
+        this._actor = new St.Widget({
+            layout_manager: new Clutter.FixedLayout(),
+            reactive: true,
+            can_focus: true,
+            track_hover: true,
+            clip_to_allocation: true,
+            visible: false,
+        });
+        this._panel = new St.BoxLayout({
+            style_class: 'window-list-group-preview-panel',
+            orientation: Clutter.Orientation.VERTICAL,
+            clip_to_allocation: true,
+        });
+        this._scroll = new St.ScrollView({
+            style_class: 'window-list-group-preview-scroll',
+            reactive: true,
+            hscrollbar_policy: St.PolicyType.NEVER,
+            vscrollbar_policy: St.PolicyType.AUTOMATIC,
+            overlay_scrollbars: false,
+            enable_mouse_scrolling: true,
+        });
+        // St.Viewport translates its own coordinate system when scrolling.
+        // Its clip_to_view follows the adjustment; clip_to_allocation would
+        // clip against the original first page, including during picking.
+        this._content = new St.BoxLayout({
+            style_class: 'window-list-group-preview-rows',
+            orientation: Clutter.Orientation.VERTICAL,
+            clip_to_view: true,
+        });
+        this._scroll.set_child(this._content);
+        this._panel.add_child(this._scroll);
+        this._actor.add_child(this._panel);
+        // Cover only the real distance from the work-area edge to button top.
+        this._bridge = new St.Widget({reactive: true, clip_to_allocation: true});
+        this._actor.add_child(this._bridge);
+        Main.layoutManager.addChrome(this._actor);
+        this._actor.connect('notify::hover', () => this.syncHover());
+        // Capture ESC and Ctrl+wheel before focused children consume them.
+        this._actor.connect('captured-event', (_actor, event) => {
+            if (this._modalGrab && event.type() === Clutter.EventType.KEY_PRESS &&
+                event.get_key_symbol() === Clutter.KEY_Escape) {
+                this._button._hoverDismissed = true;
+                this._button._cancelShowLabel();
+                this.hide();
+                return Clutter.EVENT_STOP;
+            }
+            if (event.type() === Clutter.EventType.SCROLL)
+                return this._onScrollEvent(event);
+            return Clutter.EVENT_PROPAGATE;
+        });
+        this._panel.connect('style-changed', () => this._queueLayout());
+        this._scroll.connect('style-changed', () => this._queueLayout());
+        settings.connectObject('changed::preview-width',
+            () => this._queueLayout(), this._actor);
+        button.connectObject(
+            'notify::allocation', () => this._queueLayout(),
+            'notify::mapped', () => {
+                if (!button.mapped)
+                    this.hide();
+            },
+            'drag-begin', () => this.hide(), this._actor);
+        global.display.connectObject(
+            'notify::focus-window', () => this._syncLastActive(),
+            'workareas-changed', () => this._queueLayout(), this._actor);
+    }
+
+    show() {
+        if (this._button._hoverDismissed)
+            return;
+        if (this._actor.visible) {
+            this.syncHover();
+            return;
+        }
+        this.refresh(true);
+    }
+
+    _onScrollEvent(event) {
+        if (!(event.get_state() & Clutter.ModifierType.CONTROL_MASK))
+            return Clutter.EVENT_PROPAGATE;
+        let delta;
+        switch (event.get_scroll_direction()) {
+        case Clutter.ScrollDirection.UP:
+            delta = 20;
+            break;
+        case Clutter.ScrollDirection.DOWN:
+            delta = -20;
+            break;
+        case Clutter.ScrollDirection.SMOOTH: {
+            const [, dy] = event.get_scroll_delta();
+            this._zoomRemainder = (this._zoomRemainder ?? 0) - dy * 20;
+            delta = Math.trunc(this._zoomRemainder);
+            this._zoomRemainder -= delta;
+            break;
+        }
+        default:
+            return Clutter.EVENT_PROPAGATE;
+        }
+        if (delta) {
+            const width = this._settings.get_int('preview-width');
+            const [, range] = this._settings.settings_schema.get_key('preview-width').get_range().deep_unpack();
+            const [min, max] = range.deep_unpack();
+            const newWidth = Math.max(min, Math.min(max, width + delta));
+            if (newWidth !== width)
+                this._settings.set_int('preview-width', newWidth);
+        }
+        return Clutter.EVENT_STOP;
+    }
+
+    refresh(show = false) {
+        if (!show && !this._actor.visible)
+            return;
+        this._cancelHide();
+        const windows = this._button.getWindowList()
+            .filter(window => !this._closingWindows.has(window));
+        if (windows.length < 2 || !this._button.mapped ||
+            this._button._menu.isOpen || this._button._contextMenu.isOpen) {
+            this.hide();
+            return;
+        }
+        // Keep the panel mapped during membership changes. New buttons stay
+        // hidden until layout, so hover/grabs on existing cards are preserved.
+        for (const [window, entry] of this._entries) {
+            if (!windows.includes(window)) {
+                entry.card.destroy();
+                entry.button.destroy();
+                this._entries.delete(window);
+            }
+        }
+        for (const window of windows) {
+            if (this._entries.has(window))
+                continue;
+            const cardButton = new St.Button({
+                style_class: 'window-list-group-preview-button',
+                reactive: true,
+                can_focus: true,
+                track_hover: true,
+                button_mask: St.ButtonMask.ONE,
+                x_expand: false,
+                y_expand: false,
+                x_align: Clutter.ActorAlign.START,
+                y_align: Clutter.ActorAlign.START,
+                visible: false,
+            });
+            if (!this._rows.length)
+                this._addRow();
+            this._rows[0].add_child(cardButton);
+            const card = new WindowHoverCard(this._button, this._settings, {
+                parent: cardButton,
+                onSizeChanged: () => this._queueLayout(),
+            });
+            card._title.add_style_class_name('window-list-group-preview-title');
+            this._entries.set(window, {button: cardButton, card});
+            cardButton.connect('notify::hover', () => {
+                if (cardButton.hover)
+                    card._actor.add_style_pseudo_class('hover');
+                else
+                    card._actor.remove_style_pseudo_class('hover');
+            });
+            cardButton.connect('clicked', () => {
+                this.hide();
+                Main.activateWindow(window);
+            });
+            window.connectObject(
+                'workspace-changed', () => this.refresh(),
+                'notify::skip-taskbar', () => this.refresh(),
+                'unmanaging', () => {
+                    this._closingWindows.add(window);
+                    this.refresh();
+                }, cardButton);
+            card.show(window);
+        }
+        this._syncLastActive(windows);
+        // Allocate the entire panel before mapping any embedded preview actors.
+        this._layout();
+        for (const entry of this._entries.values())
+            entry.button.show();
+        this._actor.show();
+        if (!this._modalGrab) {
+            // On Wayland, a stage signal alone cannot intercept application
+            // keys. Main.pushModal saves the previous key focus; popModal
+            // restores it after releasing the grab. Grab the stage
+            // so pointer events can still reach the source taskbar button and
+            // other groups, preserving their click, hover and drag behavior.
+            this._modalGrab = Main.pushModal(global.stage, {
+                actionMode: Shell.ActionMode.POPUP,
+            });
+            if (!this._modalGrab) {
+                this._modalGrab = null;
+                this.hide();
+                return;
+            }
+            global.stage.set_key_focus(this._actor);
+        }
+        if (!show)
+            this.syncHover();
+    }
+
+    _syncLastActive(windows = this._button.getWindowList()) {
+        if (!this._entries.size)
+            return;
+        const lastActive = this._button._getLastActiveWindow(windows);
+        for (const [window, entry] of this._entries) {
+            if (window === lastActive)
+                entry.card._actor.add_style_pseudo_class('last-active');
+            else
+                entry.card._actor.remove_style_pseudo_class('last-active');
+        }
+    }
+
+    _queueLayout() {
+        if (!this._entries.size || this._laterId)
+            return;
+        const laterId = global.compositor.get_laters().add(
+            Meta.LaterType.BEFORE_REDRAW, () => {
+                if (this._laterId !== laterId)
+                    return GLib.SOURCE_REMOVE;
+                this._laterId = 0;
+                this._layout();
+                return GLib.SOURCE_REMOVE;
+            });
+        this._laterId = laterId;
+    }
+
+    _layout() {
+        if (!this._entries.size)
+            return;
+        const workArea = Main.layoutManager.getWorkAreaForMonitor(this._button._monitorIndex);
+        const [buttonX, buttonY] = this._button._button.get_transformed_position();
+        const [buttonWidth] = this._button._button.get_transformed_size();
+        const bottom = Math.min(buttonY, workArea.y + workArea.height);
+        const availableHeight = Math.max(1, bottom - workArea.y);
+        const bounds = new Clutter.ActorBox();
+        bounds.set_origin(0, 0);
+        bounds.set_size(workArea.width, availableHeight);
+        const contentBox = this._panel.get_theme_node().get_content_box(bounds);
+        const availableWidth = Math.max(1, contentBox.get_width());
+        const maxHeight = Math.max(1, contentBox.get_height());
+        const entries = [...this._entries.values()];
+        const cardWidth = Math.max(...entries.map(entry =>
+            entry.button.get_preferred_width(-1)[1]));
+        const cardHeight = Math.max(...entries.map(entry =>
+            entry.button.get_preferred_height(cardWidth)[1]));
+        if (!this._rows.length)
+            this._addRow();
+        const spacing = this._rows[0].get_theme_node().get_length('spacing');
+        const rowSpacing = this._content.get_theme_node().get_length('spacing');
+        const rowsBox = this._content.get_theme_node().get_content_box(bounds);
+        const contentInset = workArea.width - rowsBox.get_width();
+        // Reserve three themed gaps for the non-overlay scrollbar without
+        // measuring an internal actor. ScrollView allocates the bar itself;
+        // the content's right padding keeps it clear of the cards.
+        const scrollbarGutter = 3 * spacing;
+        // The viewport is sized for 3x3 cards at the schema's default zoom.
+        // Keep that budget as zoom changes; smaller cards reveal more columns
+        // and rows, rather than shrinking the panel together with its cards.
+        const defaultWidth = this._settings.get_default_value('preview-width').get_int32();
+        const previewWidth = this._settings.get_int('preview-width');
+        const referenceWidth = cardWidth - previewWidth + defaultWidth;
+        const previewHeightDelta = Math.min(defaultWidth * 9 / 16, workArea.height / 2) -
+            Math.min(previewWidth * 9 / 16, workArea.height / 2);
+        const referenceHeight = Math.max(...entries.map(entry =>
+            entry.button.get_preferred_height(cardWidth)[1] +
+            (entry.card._preview.visible ? previewHeightDelta : 0)));
+        const referenceColumns = Math.min(3, entries.length);
+        const viewportWidth = Math.min(availableWidth,
+            referenceColumns * referenceWidth + (referenceColumns - 1) * spacing +
+            contentInset + scrollbarGutter);
+        const columns = Math.max(1, Math.min(entries.length, Math.floor(
+            (viewportWidth - contentInset - scrollbarGutter + spacing) / (cardWidth + spacing))));
+        const rowCount = Math.ceil(entries.length / columns);
+        while (this._rows.length < rowCount)
+            this._addRow();
+        entries.forEach((entry, i) => {
+            const row = this._rows[Math.floor(i / columns)];
+            if (entry.button.get_parent() !== row) {
+                entry.button.get_parent()?.remove_child(entry.button);
+                row.add_child(entry.button);
+            }
+        });
+        while (this._rows.length > rowCount)
+            this._rows.pop().destroy();
+        // Uniform slots keep rows aligned, including cards without a source.
+        for (const row of this._rows)
+            row.height = cardHeight;
+
+        const viewportHeight = 3 * referenceHeight + 2 * rowSpacing;
+        const scrollWidth = viewportWidth;
+        const scrollHeight = Math.min(maxHeight, viewportHeight,
+            rowCount * cardHeight + (rowCount - 1) * rowSpacing);
+        this._scroll.set_size(scrollWidth, scrollHeight);
+        const width = scrollWidth + workArea.width - contentBox.get_width();
+        const panelHeight = scrollHeight + availableHeight - contentBox.get_height();
+        const bridgeHeight = Math.max(0, buttonY - bottom);
+        const height = panelHeight + bridgeHeight;
+        const x = Math.max(workArea.x, Math.min(
+            buttonX + (buttonWidth - width) / 2,
+            workArea.x + workArea.width - width));
+        // Share the button's exact edge, including fractional monitor scaling.
+        const y = buttonY - height;
+        // FixedLayout keeps natural scroll-content requests from enlarging the
+        // outer actor or allocating the reactive bridge over the card area.
+        this._panel.set_position(0, 0);
+        this._panel.set_size(width, panelHeight);
+        this._bridge.set_position(0, panelHeight);
+        this._bridge.set_size(width, bridgeHeight);
+        this._actor.set_position(x, y);
+        this._actor.set_size(width, height);
+        const box = new Clutter.ActorBox();
+        box.set_origin(x, y);
+        box.set_size(width, height);
+        this._actor.allocate(box);
+        this._actor.get_parent().set_child_above_sibling(this._actor, null);
+        // Keep a mapped panel mapped: hiding during layout invalidates hover
+        // and interrupts St.Button/ScrollBar pointer grabs mid-interaction.
+    }
+
+    _addRow() {
+        const row = new St.BoxLayout({style_class: 'window-list-group-preview-row'});
+        this._content.add_child(row);
+        this._rows.push(row);
+    }
+
+    syncHover() {
+        if (!this._actor.visible)
+            return;
+        if (this._containsPointer()) {
+            this._cancelHide();
+            return;
+        }
+        if (this._hideId)
+            return;
+        // Leave can precede enter and picking can still describe the preceding
+        // allocation. Check again after event delivery before destroying buttons.
+        const hideId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+            if (this._hideId !== hideId)
+                return GLib.SOURCE_REMOVE;
+            this._hideId = 0;
+            if (!this._containsPointer())
+                this.hide();
+            return GLib.SOURCE_REMOVE;
+        });
+        this._hideId = hideId;
+    }
+
+    _containsPointer() {
+        const [x, y] = global.get_pointer();
+        const actor = global.stage.get_actor_at_pos(Clutter.PickMode.REACTIVE, x, y);
+        const grabActor = global.stage.get_grab_actor();
+        return this._button._button.hover || this._actor.hover ||
+            !!(actor && (this._button._button.contains(actor) || this._actor.contains(actor))) ||
+            !!(grabActor && this._actor.contains(grabActor));
+    }
+
+    _cancelHide() {
+        if (this._hideId)
+            GLib.source_remove(this._hideId);
+        this._hideId = 0;
+    }
+
+    hide() {
+        this._cancelHide();
+        if (this._modalGrab) {
+            Main.popModal(this._modalGrab);
+            this._modalGrab = null;
+        }
+        this._zoomRemainder = 0;
+        if (this._laterId)
+            global.compositor.get_laters().remove(this._laterId);
+        this._laterId = 0;
+        this._actor.hide();
+        for (const entry of this._entries.values()) {
+            entry.card.destroy();
+            entry.button.destroy();
+        }
+        this._entries.clear();
+        this._closingWindows.clear();
+        for (const row of this._rows)
+            row.destroy();
+        this._rows = [];
+        const adjustment = this._scroll.get_vadjustment();
+        if (adjustment)
+            adjustment.value = adjustment.lower;
     }
 
     destroy() {
@@ -619,10 +1048,12 @@ class BaseButton extends DashItemContainer {
         this.setChild(this._button);
 
         this._button.connect('notify::hover', () => {
-            if (this._button.hover)
-                this.showLabel();
-            else
+            if (this._button.hover) {
+                this._queueShowLabel();
+            } else {
+                this._hoverDismissed = false;
                 this.hideLabel();
+            }
         });
 
         this._perMonitor = perMonitor;
@@ -652,14 +1083,20 @@ class BaseButton extends DashItemContainer {
         this._button._delegate = this;
         this._draggable = DND.makeDraggable(this._button);
         this._draggable.connect('drag-begin', () => {
+            this._hoverDragging = true;
             this._removeLongPressTimeout();
+            this.hideLabel();
             this.emit('drag-begin');
         });
         this._draggable.connect('drag-cancelled', () => {
+            this._hoverDragging = false;
             this._draggable._dragActor?.setTargetWidth(this.width);
             this.emit('drag-end');
         });
-        this._draggable.connect('drag-end', () => this.emit('drag-end'));
+        this._draggable.connect('drag-end', () => {
+            this._hoverDragging = false;
+            this.emit('drag-end');
+        });
     }
 
     get active() {
@@ -686,7 +1123,34 @@ class BaseButton extends DashItemContainer {
         this._updateVisibility();
     }
 
+    _queueShowLabel() {
+        if (this._hoverDismissed || this._showLabelId)
+            return;
+        if (this._groupHoverPanel?._actor.visible) {
+            this._groupHoverPanel.syncHover();
+            return;
+        }
+        const showId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+            if (this._showLabelId !== showId)
+                return GLib.SOURCE_REMOVE;
+            this._showLabelId = 0;
+            if (this.mapped && this._button.hover && !this._hoverDismissed &&
+                !this._hoverDragging && !this._menu?.isOpen && !this._contextMenu?.isOpen)
+                this.showLabel();
+            return GLib.SOURCE_REMOVE;
+        });
+        this._showLabelId = showId;
+    }
+
+    _cancelShowLabel() {
+        if (this._showLabelId)
+            GLib.source_remove(this._showLabelId);
+        this._showLabelId = 0;
+    }
+
     showLabel() {
+        if (this._hoverDismissed)
+            return;
         const window = this instanceof WindowButton
             ? (this._unmanaging ? null : this.metaWindow)
             : (this._singleWindowMode ? this.getWindowList()[0] : null);
@@ -705,6 +1169,7 @@ class BaseButton extends DashItemContainer {
     }
 
     hideLabel() {
+        this._cancelShowLabel();
         this._hoverCard?.hide();
         super.hideLabel();
     }
@@ -868,6 +1333,7 @@ class BaseButton extends DashItemContainer {
     }
 
     _onDestroy() {
+        this._cancelShowLabel();
         this._hoverCard?.destroy();
         this._hoverCard = null;
         this._removeLongPressTimeout();
@@ -1022,7 +1488,7 @@ class GroupedWindowMenuItem extends PopupMenu.PopupBaseMenuItem {
         GObject.registerClass(this);
     }
 
-    constructor(metaWindow, menu, maxWidth) {
+    constructor(metaWindow, menu, maxWidth, monitorIndex) {
         super();
         this.add_style_class_name('window-list-grouped-item');
 
@@ -1033,43 +1499,20 @@ class GroupedWindowMenuItem extends PopupMenu.PopupBaseMenuItem {
         this.add_child(this._title);
         this.label_actor = this._title.label_actor;
 
-        this._tooltipLabel = new St.Label({
-            style_class: 'dash-label',
-            style: `max-width: ${maxWidth}px;`,
-        });
-        this._tooltipLabel.clutter_text.set({
-            ellipsize: Pango.EllipsizeMode.NONE,
-            single_line_mode: false,
-            line_wrap: true,
-            line_wrap_mode: Pango.WrapMode.WORD_CHAR,
-        });
-        this._tooltipLabel.hide();
-        Main.layoutManager.addChrome(this._tooltipLabel);
-        this._tooltipLabel.connect('destroy', () => {
-            this._tooltipLabel = null;
-        });
-
-        this.connect('notify::hover', () => this._syncTooltip(menu));
-        this.connect('notify::allocation', () => this._syncTooltip(menu));
-        this.connect('notify::mapped', () => this._syncTooltip(menu));
-        this._title.connectObject(
-            'notify::allocation', () => this._syncTooltip(menu),
-            'style-changed', () => this._syncTooltip(menu), this);
-        this.label_actor.connectObject(
-            'notify::allocation', () => this._syncTooltip(menu),
-            'style-changed', () => this._syncTooltip(menu), this);
-        this.label_actor.clutter_text.connectObject(
-            'notify::text', () => this._syncTooltip(menu), this);
-        metaWindow.connectObject(
-            'notify::title', () => this._syncTooltip(menu), this);
+        this._monitorIndex = monitorIndex;
+        this._unmanaging = false;
+        this.connect('notify::hover', () => this._syncPreview(menu));
+        this.connect('notify::allocation', () => this._syncPreview(menu));
+        this.connect('notify::mapped', () => this._syncPreview(menu));
+        metaWindow.connectObject('unmanaging', () => {
+            this._unmanaging = true;
+            this._syncPreview(menu);
+        }, this);
         this.connect('destroy', () => {
-            const label = this._tooltipLabel;
-            this._tooltipLabel = null;
-            if (label) {
-                label.hide();
-                Main.layoutManager.removeChrome(label);
-                label.destroy();
-            }
+            if (menu._windowPreviewItem === this)
+                menu._windowPreviewItem = null;
+            this._hoverCard?.destroy();
+            this._hoverCard = null;
         });
 
         global.display.connectObject(
@@ -1077,60 +1520,28 @@ class GroupedWindowMenuItem extends PopupMenu.PopupBaseMenuItem {
         menu.connectObject(
             'open-state-changed', () => {
                 this._syncFocus();
-                this._syncTooltip(menu);
+                this._syncPreview(menu);
             }, this);
         this._syncFocus();
     }
 
-    _titleIsTruncated() {
-        const titleBox = this._title.get_allocation_box();
-        const titleContent = this._title.get_theme_node().get_content_box(titleBox);
-        const labelBox = this.label_actor.get_allocation_box();
-        const labelContent = this.label_actor.get_theme_node().get_content_box(labelBox);
-        const [labelStageX, labelStageY] = this.label_actor.get_transformed_position();
-        const [success, labelX] =
-            this._title.transform_stage_point(labelStageX, labelStageY);
-        if (!success)
-            return false;
-
-        // Intersect the label content with WindowTitle's constrained content box.
-        const left = Math.max(titleContent.x1 - titleBox.x1,
-            labelX + labelContent.x1 - labelBox.x1);
-        const right = Math.min(titleContent.x2 - titleBox.x1,
-            labelX + labelContent.x2 - labelBox.x1);
-        const visibleWidth = Math.max(0, right - left);
-        const layout = this.label_actor.clutter_text.get_layout().copy();
-        layout.set_width(-1);
-        layout.set_ellipsize(Pango.EllipsizeMode.NONE);
-        const [naturalWidth] = layout.get_pixel_size();
-        return naturalWidth > visibleWidth;
-    }
-
-    _syncTooltip(menu) {
-        const label = this._tooltipLabel;
-        if (!label)
-            return;
-
-        if (!menu.isOpen || !this.hover || !this.mapped || !this._titleIsTruncated()) {
-            label.hide();
+    _syncPreview(menu) {
+        if (!menu.isOpen || !this.hover || !this.mapped || this._unmanaging) {
+            this._hoverCard?.hide();
+            if (menu._windowPreviewItem === this)
+                menu._windowPreviewItem = null;
             return;
         }
-
-        label.text = this._window.title ?? '';
-        label.show();
-
-        const parent = label.get_parent();
-        if (parent)
-            parent.set_child_above_sibling(label, null);
-
-        const [stageX, stageY] = this.get_transformed_position();
-        const [rowWidth] = this.get_transformed_size();
-        const [, labelWidth] = label.get_preferred_width(-1);
-        const [, labelHeight] = label.get_preferred_height(labelWidth);
-        const offset = label.get_theme_node().get_length('-y-offset');
-        const x = Math.max(0, Math.min(stageX + (rowWidth - labelWidth) / 2,
-            global.stage.width - labelWidth));
-        label.set_position(x, stageY - labelHeight - offset);
+        // Enter can precede the previous row's leave notification.
+        if (menu._windowPreviewItem !== this) {
+            menu._windowPreviewItem?._hoverCard?.hide();
+            menu._windowPreviewItem = this;
+        }
+        if (!this._hoverCard) {
+            const settings = Extension.lookupByURL(import.meta.url).getSettings();
+            this._hoverCard = new WindowHoverCard(this, settings, {adjacentTo: menu.actor});
+        }
+        this._hoverCard.show(this._window);
     }
 
     _syncFocus() {
@@ -1156,6 +1567,10 @@ class AppButton extends BaseButton {
         this._menu = new PopupMenu.PopupMenu(this, 0.5, St.Side.BOTTOM);
         this._menu.connect('open-state-changed',
             this._onMenuStateChanged.bind(this));
+        this._menu.connect('open-state-changed', (_menu, isOpen) => {
+            if (isOpen)
+                this._groupHoverPanel?.hide();
+        });
         this._menu.actor.hide();
         this._menu.connect('activate', this._onMenuActivate.bind(this));
         this._menuManager.addMenu(this._menu);
@@ -1193,6 +1608,7 @@ class AppButton extends BaseButton {
         } else {
             this.visible = this.getWindowList().length >= 1;
         }
+        this._groupHoverPanel?.refresh();
     }
 
     _isFocused() {
@@ -1210,9 +1626,35 @@ class AppButton extends BaseButton {
         return this.app.get_windows().filter(win => this._isWindowVisible(win));
     }
 
+    _getLastActiveWindow(windows) {
+        const mruWindows = global.display.get_tab_list(Meta.TabList.NORMAL, null);
+        return mruWindows.find(win => windows.includes(win)) ?? windows[0];
+    }
+
+    showLabel() {
+        if (this._hoverDismissed)
+            return;
+        if (this.getWindowList().length > 1) {
+            super.hideLabel();
+            if (!this._groupHoverPanel) {
+                const settings = Extension.lookupByURL(import.meta.url).getSettings();
+                this._groupHoverPanel = new GroupWindowHoverPanel(this, settings);
+            }
+            this._groupHoverPanel.show();
+            return;
+        }
+        super.showLabel();
+    }
+
+    hideLabel() {
+        super.hideLabel();
+        this._groupHoverPanel?.syncHover();
+    }
+
     _windowsChanged() {
         const windows = this.getWindowList();
         const singleWindowMode = windows.length === 1;
+        this._groupHoverPanel?.refresh();
 
         if (this._singleWindowMode === singleWindowMode)
             return;
@@ -1236,6 +1678,10 @@ class AppButton extends BaseButton {
 
         this._contextMenu.connect(
             'open-state-changed', this._onMenuStateChanged.bind(this));
+        this._contextMenu.connect('open-state-changed', (_menu, isOpen) => {
+            if (isOpen)
+                this._groupHoverPanel?.hide();
+        });
         Main.uiGroup.add_child(this._contextMenu.actor);
         this._contextMenu.actor.hide();
         this._contextMenuManager.addMenu(this._contextMenu);
@@ -1251,6 +1697,7 @@ class AppButton extends BaseButton {
     }
 
     _onClicked(actor, button) {
+        this._groupHoverPanel?.hide();
         const menuWasOpen = this._menu.isOpen;
         if (menuWasOpen)
             this._menu.close();
@@ -1270,16 +1717,14 @@ class AppButton extends BaseButton {
                 this._minimizeOrActivateWindow(windows[0]);
             } else if (windows.length > 1 &&
                 !windows.includes(global.display.focus_window)) {
-                const mruWindows = global.display.get_tab_list(Meta.TabList.NORMAL, null);
-                const window = mruWindows.find(win => windows.includes(win)) ?? windows[0];
-                Main.activateWindow(window);
+                Main.activateWindow(this._getLastActiveWindow(windows));
             } else {
                 this._menu.removeAll();
                 const maxWidth = this._getMenuMaxWidth();
 
                 for (let i = 0; i < windows.length; i++) {
                     const item = new GroupedWindowMenuItem(
-                        windows[i], this._menu, maxWidth);
+                        windows[i], this._menu, maxWidth, this._monitorIndex);
                     this._menu.addMenuItem(item);
                 }
                 this._openMenu(this._menu);
@@ -1309,6 +1754,8 @@ class AppButton extends BaseButton {
     }
 
     _onDestroy() {
+        this._groupHoverPanel?.destroy();
+        this._groupHoverPanel = null;
         super._onDestroy();
         this._menu.destroy();
     }

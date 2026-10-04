@@ -66,7 +66,13 @@ SPDX-License-Identifier: GPL-2.0-or-later
     <key name="preview-width" type="i">
       <default>240</default>
       <range min="160" max="480"/>
-      <summary>Individual window hover preview width</summary>
+      <summary>Window preview width</summary>
+      <description>
+        Width in pixels for individual and grouped window previews. Ctrl+scroll
+        in the grouped preview changes and saves this value. The grouped panel
+        fits three rows and columns at the default width and reflows as cards
+        shrink or grow, within the monitor's available space.
+      </description>
     </key>
   </schema>
 </schemalist>

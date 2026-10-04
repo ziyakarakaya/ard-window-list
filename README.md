@@ -25,6 +25,13 @@ testing in a running GNOME session.
 - Show the current workspace or all workspaces, and use the primary or all monitors.
 - Workspace previews or workspace names, plus dynamic or fixed workspace controls.
 - Light and dark styles, truncated-title tooltips, and grouped-window menus.
+- Window previews appear after half a second of taskbar hover. Group previews use
+  a 3×3 viewport at the default card width, within the monitor's available space.
+  Ctrl+wheel resizes cards and reflows the grid to show more cards when they fit;
+  the preview width is saved in GSettings across logins. Ordinary scrolling
+  reaches the remaining cards. While the group preview is open, it receives
+  keyboard input; Escape closes it without reaching the active application,
+  until the taskbar button is left and entered again.
 
 ## Screenshots
 
@@ -118,6 +125,7 @@ node --input-type=module --check < extension.js
 node --input-type=module --check < prefs.js
 node --input-type=module --check < workspacePrefs.js
 node --input-type=module --check < workspaceIndicator.js
+node scripts/test-window-hover-card.mjs
 glib-compile-schemas --strict --dry-run schemas
 desktop-file-validate data/ard-window-list-preferences.desktop
 ```

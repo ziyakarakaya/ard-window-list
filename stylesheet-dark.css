@@ -47,6 +47,62 @@
   font-weight: bold;
 }
 
+.window-list-group-preview-panel {
+  background-color: rgba(32,32,32,0.98);
+  border: 1px solid rgba(255,255,255,0.30);
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.window-list-group-preview-rows,
+.window-list-group-preview-row {
+  spacing: 8px;
+}
+
+.window-list-group-preview-scroll {
+  min-width: 0;
+  min-height: 0;
+}
+
+.window-list-group-preview-rows {
+  padding-right: 8px;
+}
+
+.window-list-group-preview-button,
+.window-list-group-preview-button:hover,
+.window-list-group-preview-button:active,
+.window-list-group-preview-button:focus {
+  padding: 0;
+  border-width: 0;
+  background-color: transparent;
+  box-shadow: none;
+  text-shadow: none;
+  transition-duration: 0ms;
+}
+
+.window-list-group-preview-button .window-list-hover-card {
+  background-color: #202020;
+}
+
+.window-list-group-preview-button .window-list-group-preview-title {
+  color: #f6f6f6;
+  background-color: #161616;
+  border-radius: 3px;
+  font-weight: normal;
+  text-shadow: none;
+}
+
+.window-list-group-preview-button .window-list-hover-card:hover {
+  background-color: #404040;
+  border-color: rgba(255,255,255,0.65);
+}
+
+.window-list-group-preview-button .window-list-hover-card:last-active,
+.window-list-group-preview-button .window-list-hover-card:last-active:hover {
+  border-color: -st-accent-color;
+  box-shadow: inset 0 0 0 1px -st-accent-color;
+}
+
 .bottom-panel {
   background-color: #000000;
   border-top-width: 0px;
