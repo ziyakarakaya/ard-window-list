@@ -30,11 +30,11 @@ testing in a running GNOME session.
 
 ### Window list
 
-![ARD Window List](screenshots/ard-window-list-main.png)
+![ARD Window List/Taskbar](screenshots/ard-window-list-main.png)
 
 ### Preferences
 
-![ARD Window List Preferences](screenshots/ard-window-list-preferences.png)
+![ARD Window List/Taskbar Preferences](screenshots/ard-window-list-preferences.png)
 ## Install from source
 
 Requirements: GNOME Shell 50, `gnome-extensions`, Python 3.9 or newer, Node.js with
@@ -52,7 +52,7 @@ glib-compile-schemas "$HOME/.local/share/gnome-shell/extensions/ard-window-list@
 
 The explicit schema compilation ensures the installed source schema is available;
 the ZIP deliberately excludes `gschemas.compiled`. Log out and back in after the
-first installation on Wayland, then enable ARD Window List in the Extensions app,
+first installation on Wayland, then enable ARD Window List/Taskbar in the Extensions app,
 or run:
 
 ```sh
@@ -144,7 +144,7 @@ installation and are not run by the package script.
 | `dist/` | Ignored generated release archives |
 
 `extension.js.before-appearance` is a historical backup identical to the installed
-GNOME Window List 50.0 reference, with no unique code required by ARD Window List.
+GNOME Window List 50.0 reference, with no unique code required by ARD Window List/Taskbar.
 It, the generated `schemas/gschemas.compiled`, and local development instructions
 in `AGENTS.md` are ignored and excluded from release ZIPs. Existing local copies
 are preserved. These files should be absent from the public source tree: untrack
@@ -216,7 +216,7 @@ GNOME Extensions or a GitHub release.
 ## License and attribution
 
 Copyright 2026 Ziya Karakaya for new release tooling, documentation, and launcher.
-ARD Window List is free software under the **GNU General Public License, version 2
+ARD Window List/Taskbar is free software under the **GNU General Public License, version 2
 or (at your option) any later version** (`GPL-2.0-or-later`). See [LICENSE](LICENSE).
 It is provided without warranty.
 
@@ -232,5 +232,5 @@ Git commit. Original copyright and GPL-2.0-or-later headers are preserved.
 See [ATTRIBUTION.md](ATTRIBUTION.md) for the per-file mapping, local evidence,
 contributors, and ARD-specific modifications. This independent derivative does
 not claim GNOME endorsement or official GNOME support.
-Report ARD Window List issues in
+Report ARD Window List/Taskbar issues in
 [this repository](https://github.com/ziyakarakaya/ard-window-list/issues).
