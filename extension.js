@@ -1040,6 +1040,11 @@ class AppButton extends BaseButton {
                 if (contextMenuWasOpen)
                     return;
                 this._minimizeOrActivateWindow(windows[0]);
+            } else if (windows.length > 1 &&
+                !windows.includes(global.display.focus_window)) {
+                const mruWindows = global.display.get_tab_list(Meta.TabList.NORMAL, null);
+                const window = mruWindows.find(win => windows.includes(win)) ?? windows[0];
+                Main.activateWindow(window);
             } else {
                 this._menu.removeAll();
                 const maxWidth = this._getMenuMaxWidth();
